@@ -20,7 +20,7 @@ dev = ["pytest>=8"]
 boveda = "boveda.cli:main"
 
 [tool.setuptools]
-packages = ["boveda", "boveda.ingest", "boveda.pipeline"]
+packages = ["boveda", "boveda.ingest", "boveda.pipeline", "boveda.publish"]
 
 [tool.setuptools.package-data]
 boveda = ["prompts/*.md"]

@@ -17,8 +17,11 @@ guardados → importar → descargar audio → transcribir ─┬─→ analizar
 
 ## Por qué está hecho así
 
-- **Todo local.** SQLite + archivos en tu disco. Nada depende de un servicio que
-  pueda cerrar; el día que quieras irte, te llevas una carpeta.
+- **Todo en una carpeta.** Código, base de datos, audio, fotogramas y
+  publicaciones viven bajo `boveda/`, y la ruta se ancla a la carpeta del
+  proyecto: da igual desde dónde ejecutes el comando, los datos siempre caen en
+  `boveda/data/`. Nada depende de un servicio que pueda cerrar; el día que
+  quieras irte, te llevas esa carpeta.
 - **Reanudable.** Cada item tiene un estado (`importado → descargado →
   transcrito → analizado`). Si algo falla a mitad de 3.000 videos, `boveda
   reintentar` retoma solo lo que quedó pendiente. Reimportar el mismo export no
@@ -31,6 +34,9 @@ guardados → importar → descargar audio → transcribir ─┬─→ analizar
 - **También lee lo que no se dice.** Media red social es texto quemado en
   pantalla sin una sola palabra hablada. Esos videos se pasan por OCR de
   fotogramas clave y entran a la bóveda con el mismo análisis que el resto.
+- **Nada se publica solo sin que tú lo apruebes.** La publicación automática
+  existe, pero pasa por dos puertas: aprobar la producción a mano y confirmar el
+  envío. Sin las dos, todo es ensayo.
 - **Sin inventar.** El prompt de análisis prohíbe rellenar huecos: si un dato no
   está en la transcripción, se queda vacío. Y toda afirmación fuerte se anota en
   `datos_y_afirmaciones` con si es verificable, para auditarla antes de reusarla.
@@ -38,7 +44,7 @@ guardados → importar → descargar audio → transcribir ─┬─→ analizar
 ## Instalación
 
 ```bash
-cd boveda
+cd boveda                          # todo el proyecto vive aquí dentro
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[whisper]"        # sin [whisper] si vas a transcribir por otra vía
 ```
@@ -198,6 +204,65 @@ la estructura y el mecanismo, nunca las frases, y descarta los datos que el
 análisis marcó como caducados o no verificables. Cada producción queda guardada
 en la tabla `producciones` con estado `borrador`.
 
+### Publicar en nuestras redes
+
+```bash
+boveda redes --verificar                  # qué cuentas hay conectadas
+boveda aprobar 7                          # tú das el visto bueno a la producción
+boveda publicar 7 --red instagram --media-url https://cdn.tuweb.com/reel.mp4
+#   ↑ esto es un ENSAYO: dice qué haría y no envía nada
+boveda publicar 7 --red instagram --media-url https://... --confirmar
+```
+
+**Tres puertas antes de que algo salga a tu cuenta**, en este orden:
+
+1. La producción tiene que estar en `aprobado`. Un borrador recién generado no
+   se publica ni por error.
+2. Sin `--confirmar` todo es ensayo: te dice a qué red iría, si faltan
+   credenciales y si falta el medio, y no toca la API.
+3. Una producción no sale dos veces en la misma red. No es una comprobación en
+   el código, es un índice único en la base de datos.
+
+Todo intento queda en la tabla `publicaciones` con su id remoto, su URL y el
+error si lo hubo: `boveda publicaciones` es el historial.
+
+**Programar y dejar que salga solo:**
+
+```bash
+boveda publicar 7 --red tiktok --media reel.mp4 --cuando 2026-09-10T18:00:00+00:00
+boveda cola                               # ensayo: qué saldría ahora
+boveda cola --confirmar                   # envía lo que ya toca
+boveda cancelar 3                         # quita algo de la cola
+```
+
+Para que sea automático de verdad, una línea de cron con `cola --confirmar`:
+
+```cron
+*/15 * * * * cd /ruta/a/boveda && .venv/bin/boveda cola --confirmar >> data/cola.log 2>&1
+```
+
+**Qué necesita cada red** (son requisitos de cada plataforma, no de este código):
+
+| Red | Formatos | Lo que te va a pedir |
+|---|---|---|
+| `instagram` | reel, carrusel, short | Cuenta profesional + página de Facebook, token con `instagram_business_content_publish`, y el medio en una **URL pública**: la API no acepta subidas directas. De ahí `BOVEDA_MEDIA_BASE_URL`. |
+| `tiktok` | reel, short | Token con scope `video.publish`. **Hasta que TikTok audite tu app solo permite `SELF_ONLY`** (el video queda privado en tu cuenta), y ese es el valor por defecto aquí. |
+| `youtube` | short, reel, blog | OAuth de aplicación instalada con `youtube.upload`; se guarda un refresh token una vez. Sube como `private` salvo que cambies `YT_PRIVACY`. |
+| `x` | hilo | Token de usuario con escritura. El cuerpo se parte respetando los párrafos del guion y cada parte responde a la anterior. |
+| `archivo` | todos | Ninguna credencial. Deja el texto y el medio en `data/publicaciones/`, listos para subir a mano. Es el destino por defecto para probar el flujo entero sin arriesgar nada. |
+
+Los tokens van en tu `.env` (que está en `.gitignore`): mira `.env.example` para
+los nombres exactos de cada variable.
+
+> **Sobre las versiones de las APIs.** Los conectores siguen los flujos
+> documentados de cada plataforma —contenedor + `media_publish` en Instagram,
+> `video/init` + subida + `status/fetch` en TikTok, subida reanudable en
+> YouTube—, pero **no están probados contra cuentas reales**: no tengo acceso a
+> las tuyas. Estrena cada red con `--red archivo` primero, luego con la cuenta
+> real y un contenido de prueba, y sabrás en un minuto si algún parámetro
+> cambió. La versión de la API de Instagram se ajusta con
+> `BOVEDA_IG_API_VERSION` sin tocar código.
+
 ### Exportar
 
 ```bash
@@ -253,7 +318,10 @@ boveda/
       repurpose.py        generación de contenido nuevo
     prompts/              los prompts, en archivos aparte para que los edites
     export.py             markdown y json
-  tests/                  21 pruebas, sin red (cliente de Claude simulado)
+    publicador.py         cola, aprobaciones y registro de lo publicado
+    publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
+  tests/                  40 pruebas, sin red (Claude y las APIs de redes simulados)
+  data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
 ```bash
@@ -265,7 +333,7 @@ python -m pytest        # correr las pruebas
 - El OCR lee fotogramas sueltos, no el video en movimiento: un texto que aparece
   y desaparece entre dos fotogramas clave se pierde. Sube
   `BOVEDA_OCR_MAX_FRAMES` en las piezas donde importe.
-- No publica solo: deja borradores en `producciones`. La conexión a la API de
-  publicación de cada red es el siguiente paso natural.
+- No monta el video: publica el archivo que tú le pases con `--media`. Generar
+  el reel a partir del guion (voz, cortes, subtítulos) sigue siendo manual.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez
   cuentas). La dedup es por URL.

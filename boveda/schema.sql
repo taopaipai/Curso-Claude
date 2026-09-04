@@ -114,6 +114,32 @@ CREATE TABLE IF NOT EXISTS producciones (
 
 CREATE INDEX IF NOT EXISTS idx_producciones_item ON producciones(item_id);
 
+-- Cada intento de publicar una produccion en una red. Es el registro de lo que
+-- de verdad salio: nada se publica sin una fila aqui, y nada se publica dos
+-- veces (indice unico sobre lo ya publicado).
+CREATE TABLE IF NOT EXISTS publicaciones (
+    id             INTEGER PRIMARY KEY,
+    produccion_id  INTEGER NOT NULL REFERENCES producciones(id) ON DELETE CASCADE,
+    red            TEXT NOT NULL,            -- instagram | tiktok | youtube | x | archivo
+    estado         TEXT NOT NULL DEFAULT 'programada',
+                   -- programada -> publicada | error | cancelada
+    programado_para TEXT,                    -- ISO-8601; NULL = en cuanto se procese la cola
+    publicado_en   TEXT,
+    media_ruta     TEXT,                     -- archivo local que se sube
+    media_url      TEXT,                     -- URL publica, para las redes que la exigen
+    id_remoto      TEXT,
+    url_remota     TEXT,
+    intentos       INTEGER NOT NULL DEFAULT 0,
+    error          TEXT,
+    creado_en      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pub_estado ON publicaciones(estado, programado_para);
+
+-- Una produccion no se publica dos veces en la misma red.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pub_unica
+    ON publicaciones(produccion_id, red) WHERE estado = 'publicada';
+
 CREATE TABLE IF NOT EXISTS etiquetas (
     item_id   INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     etiqueta  TEXT NOT NULL,

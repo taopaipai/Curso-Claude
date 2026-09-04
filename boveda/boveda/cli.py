@@ -9,6 +9,8 @@ Flujo tipico:
     boveda analizar
     boveda buscar "hook de curiosidad"
     boveda producir 42 --formato carrusel --nicho finanzas
+    boveda aprobar 7
+    boveda publicar 7 --red instagram --media reel.mp4 --confirmar
     boveda exportar --formato md
 """
 
@@ -20,8 +22,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from . import config, db, export
+from . import config, db, export, publicador
 from .ingest import IMPORTADORES
+from .publish import FORMATOS, REDES
 from .pipeline import analyze, download, ocr, repurpose, transcribe
 
 ETAPAS = {
@@ -233,6 +236,137 @@ def cmd_producir(args) -> int:
     return 0
 
 
+def cmd_aprobar(args) -> int:
+    cfg, con = _abrir(args)
+    try:
+        publicador.aprobar(con, args.produccion_id,
+                           "borrador" if args.deshacer else "aprobado")
+    except publicador.ErrorPublicacion as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    estado = "devuelta a borrador" if args.deshacer else "aprobada para publicar"
+    print(f"Produccion #{args.produccion_id} {estado}.")
+    con.close()
+    return 0
+
+
+def cmd_redes(args) -> int:
+    """Dice que redes estan configuradas y con que cuenta, sin publicar nada."""
+    cfg, con = _abrir(args)
+    con.close()
+    for nombre in sorted(REDES):
+        modulo = REDES[nombre]
+        formatos = ", ".join(sorted(FORMATOS.get(nombre, set())))
+        if not modulo.configurada(cfg):
+            print(f"  {nombre:<10} sin credenciales      ({formatos})")
+            continue
+        if not args.verificar:
+            print(f"  {nombre:<10} configurada           ({formatos})")
+            continue
+        try:
+            print(f"  {nombre:<10} {modulo.verificar(cfg):<21} ({formatos})")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {nombre:<10} ERROR: {exc}", file=sys.stderr)
+    if not args.verificar:
+        print("\nUsa --verificar para comprobar los tokens contra cada API.")
+    return 0
+
+
+def _publicar_filas(cfg, con, filas, ensayo: bool) -> int:
+    fallos = 0
+    for fila in filas:
+        cabecera = (f"#{fila['id']} produccion {fila['produccion_id']} -> {fila['red']}"
+                    + (f" (programada {fila['programado_para']})" if fila["programado_para"] else ""))
+        print(cabecera, flush=True)
+        try:
+            resultado = publicador.ejecutar(cfg, con, fila, ensayo=ensayo)
+        except Exception as exc:  # noqa: BLE001
+            fallos += 1
+            print(f"    ! {exc}", file=sys.stderr)
+            continue
+        detalle = resultado.detalle or "ok"
+        print(f"    {detalle}" + (f"  {resultado.url_remota}" if resultado.url_remota else ""))
+    return fallos
+
+
+def cmd_publicar(args) -> int:
+    """Programa y publica en un solo paso. Sin --confirmar es un ensayo."""
+    cfg, con = _abrir(args)
+    try:
+        pub_id = publicador.programar(
+            con, args.produccion_id, args.red, cuando=args.cuando,
+            media=args.media, media_url=args.media_url, forzar=args.forzar)
+    except publicador.ErrorPublicacion as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    fila = con.execute("SELECT * FROM publicaciones WHERE id = ?", (pub_id,)).fetchone()
+    if args.cuando:
+        print(f"Programada como publicacion #{pub_id} para {args.cuando}. "
+              f"Se enviara al ejecutar 'boveda cola --confirmar'.")
+        con.close()
+        return 0
+
+    fallos = _publicar_filas(cfg, con, [fila], ensayo=not args.confirmar)
+    if not args.confirmar:
+        print("\nEsto fue un ensayo: no se envio nada. Repite con --confirmar para publicar "
+              "de verdad.")
+        publicador.cancelar(con, pub_id)
+    con.close()
+    return 1 if fallos else 0
+
+
+def cmd_cola(args) -> int:
+    cfg, con = _abrir(args)
+    filas = publicador.pendientes(con, args.limite, args.red, args.todas)
+    if not filas:
+        print("No hay publicaciones pendientes.")
+        con.close()
+        return 0
+    fallos = _publicar_filas(cfg, con, filas, ensayo=not args.confirmar)
+    if not args.confirmar:
+        print("\nEsto fue un ensayo: la cola sigue intacta. Repite con --confirmar.")
+    con.close()
+    return 1 if fallos == len(filas) else 0
+
+
+def cmd_publicaciones(args) -> int:
+    cfg, con = _abrir(args)
+    filas = con.execute(
+        """
+        SELECT pu.*, pr.formato, pr.titulo
+        FROM publicaciones pu JOIN producciones pr ON pr.id = pu.produccion_id
+        ORDER BY pu.id DESC LIMIT ?
+        """,
+        (args.limite,),
+    ).fetchall()
+    if not filas:
+        print("Todavia no hay publicaciones registradas.")
+    for fila in filas:
+        cuando = fila["publicado_en"] or fila["programado_para"] or fila["creado_en"]
+        print(f"#{fila['id']:<4} {fila['estado']:<11} {fila['red']:<10} "
+              f"{fila['formato']:<10} {cuando}")
+        print(f"      produccion {fila['produccion_id']}: {(fila['titulo'] or '')[:60]}")
+        if fila["url_remota"]:
+            print(f"      {fila['url_remota']}")
+        if fila["error"]:
+            print(f"      ! {fila['error'][:200]}")
+    con.close()
+    return 0
+
+
+def cmd_cancelar(args) -> int:
+    cfg, con = _abrir(args)
+    try:
+        publicador.cancelar(con, args.publicacion_id)
+    except publicador.ErrorPublicacion as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"Publicacion #{args.publicacion_id} cancelada.")
+    con.close()
+    return 0
+
+
 def cmd_exportar(args) -> int:
     cfg, con = _abrir(args)
     destino = Path(args.destino) if args.destino else cfg.exports
@@ -276,8 +410,19 @@ def cmd_estado(args) -> int:
         "FROM analisis GROUP BY vigencia_estado ORDER BY n DESC"
     ):
         print(f"  {fila['vigencia_estado'] or '-':<22} {fila['n']}  (valor historico medio {fila['v']})")
-    total_prod = con.execute("SELECT COUNT(*) n FROM producciones").fetchone()["n"]
-    print(f"\nProducciones generadas: {total_prod}")
+    print("\nProducciones:")
+    for fila in con.execute(
+        "SELECT estado, COUNT(*) n FROM producciones GROUP BY estado ORDER BY n DESC"
+    ):
+        print(f"  {fila['estado']:<22} {fila['n']}")
+
+    filas = con.execute(
+        "SELECT estado, COUNT(*) n FROM publicaciones GROUP BY estado ORDER BY n DESC"
+    ).fetchall()
+    if filas:
+        print("\nPublicaciones:")
+        for fila in filas:
+            print(f"  {fila['estado']:<22} {fila['n']}")
     con.close()
     return 0
 
@@ -338,6 +483,46 @@ def construir_parser() -> argparse.ArgumentParser:
     pro.add_argument("--nicho")
     pro.add_argument("--notas", help="indicaciones extra para el guionista")
     pro.set_defaults(func=cmd_producir)
+
+    apr = sub.add_parser("aprobar", help="marca una produccion como lista para publicar")
+    apr.add_argument("produccion_id", type=int)
+    apr.add_argument("--deshacer", action="store_true", help="la devuelve a borrador")
+    apr.set_defaults(func=cmd_aprobar)
+
+    red = sub.add_parser("redes", help="que redes estan configuradas")
+    red.add_argument("--verificar", action="store_true",
+                     help="comprueba los tokens llamando a cada API")
+    red.set_defaults(func=cmd_redes)
+
+    pub = sub.add_parser("publicar", help="publica una produccion aprobada en una red")
+    pub.add_argument("produccion_id", type=int)
+    pub.add_argument("--red", required=True, choices=sorted(REDES))
+    pub.add_argument("--media", help="archivo de video o imagen que se sube")
+    pub.add_argument("--media-url", dest="media_url",
+                     help="URL publica del medio (Instagram la exige)")
+    pub.add_argument("--cuando", help="fecha ISO para dejarla programada en la cola")
+    pub.add_argument("--forzar", action="store_true",
+                     help="salta las comprobaciones de estado y de formato")
+    pub.add_argument("--confirmar", action="store_true",
+                     help="publica de verdad; sin esto es un ensayo")
+    pub.set_defaults(func=cmd_publicar)
+
+    cola = sub.add_parser("cola", help="procesa las publicaciones programadas que ya tocan")
+    cola.add_argument("--red", choices=sorted(REDES))
+    cola.add_argument("--limite", type=int)
+    cola.add_argument("--todas", action="store_true",
+                      help="incluye las programadas para mas adelante")
+    cola.add_argument("--confirmar", action="store_true",
+                      help="publica de verdad; sin esto es un ensayo")
+    cola.set_defaults(func=cmd_cola)
+
+    lis = sub.add_parser("publicaciones", help="historial de publicaciones")
+    lis.add_argument("--limite", type=int, default=20)
+    lis.set_defaults(func=cmd_publicaciones)
+
+    can = sub.add_parser("cancelar", help="cancela una publicacion programada")
+    can.add_argument("publicacion_id", type=int)
+    can.set_defaults(func=cmd_cancelar)
 
     exp = sub.add_parser("exportar", help="vuelca la boveda a markdown o json")
     exp.add_argument("--formato", choices=("md", "json"), default="md")
