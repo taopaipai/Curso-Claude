@@ -72,9 +72,6 @@ def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> None:
         return
     try:
         texto, idioma, segmentos = transcribir(cfg, Path(ruta))
-        if not texto:
-            db.marcar(con, item["id"], "error_transcripcion", "transcripcion vacia (¿video sin voz?)")
-            return
         motor = ("faster-whisper:" + cfg.whisper_modelo
                  if cfg.motor_transcripcion == "local" else "cmd")
         con.execute(
@@ -91,7 +88,10 @@ def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> None:
         if idioma:
             con.execute("UPDATE items SET idioma = COALESCE(idioma, ?) WHERE id = ?",
                         (idioma, item["id"]))
-        db.marcar(con, item["id"], "transcrito", None)
+        # Sin voz no es un fallo: es un video de puro texto. Se marca como
+        # transcrito y el aviso le dice al siguiente paso que toca OCR.
+        aviso = None if texto else "sin voz: el contenido esta en pantalla, ejecuta 'boveda ocr'"
+        db.marcar(con, item["id"], "transcrito", aviso)
         db.reindexar(con, item["id"])
     except Exception as exc:  # noqa: BLE001
         db.marcar(con, item["id"], "error_transcripcion", str(exc))

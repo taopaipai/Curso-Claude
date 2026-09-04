@@ -5,6 +5,7 @@ Flujo tipico:
     boveda importar instagram ~/export/saved_posts.json
     boveda descargar --limite 50
     boveda transcribir
+    boveda ocr              # texto en pantalla de los videos sin voz
     boveda analizar
     boveda buscar "hook de curiosidad"
     boveda producir 42 --formato carrusel --nicho finanzas
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from . import config, db, export
 from .ingest import IMPORTADORES
-from .pipeline import analyze, download, repurpose, transcribe
+from .pipeline import analyze, download, ocr, repurpose, transcribe
 
 ETAPAS = {
     "descargar": ("importado", download.procesar),
@@ -104,6 +105,62 @@ def cmd_etapa(args) -> int:
     con.close()
     print(f"Listo: {len(pendientes) - fallos} ok, {fallos} con error.")
     return 1 if fallos == len(pendientes) else 0
+
+
+def cmd_ocr(args) -> int:
+    """Lee el texto quemado en pantalla. No es una etapa obligatoria del flujo:
+    trabaja sobre los items ya descargados que no tienen (apenas) voz."""
+    cfg, con = _abrir(args)
+    try:
+        ocr.comprobar_dependencias()
+    except download.HerramientaFaltante as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
+    pendientes = ocr.candidatos(con, args.umbral if args.umbral is not None else cfg.umbral_ocr,
+                                args.limite, args.todos, args.plataforma)
+    if not pendientes:
+        print("No hay items sin voz pendientes de OCR. Usa --todos para forzar.")
+        con.close()
+        return 0
+
+    cliente = analyze.cliente() if cfg.motor_ocr != "tesseract" else None
+    fallos = 0
+    for i, item in enumerate(pendientes, 1):
+        etiqueta = (item["titulo"] or item["url_canonica"])[:70]
+        print(f"[{i}/{len(pendientes)}] #{item['id']} {etiqueta}", flush=True)
+        try:
+            ocr.procesar(cfg, con, item, cliente)
+        except Exception as exc:  # noqa: BLE001
+            fallos += 1
+            print(f"    ! {exc}", file=sys.stderr)
+            continue
+        leido = con.execute("SELECT texto, n_fotogramas FROM ocr WHERE item_id = ?",
+                            (item["id"],)).fetchone()
+        print(f"    {leido['n_fotogramas']} fotogramas, "
+              f"{len(leido['texto'])} caracteres leidos")
+    con.close()
+    print(f"Listo: {len(pendientes) - fallos} ok, {fallos} con error.")
+    return 1 if fallos == len(pendientes) else 0
+
+
+def cmd_fotogramas(args) -> int:
+    cfg, con = _abrir(args)
+    filas = con.execute(
+        "SELECT indice, segundo, texto, descripcion, ruta FROM fotogramas "
+        "WHERE item_id = ? ORDER BY indice", (args.item_id,)
+    ).fetchall()
+    if not filas:
+        print(f"El item {args.item_id} no tiene OCR todavia.", file=sys.stderr)
+        return 1
+    for fila in filas:
+        print(f"[{fila['indice']:>2}] {fila['segundo'] or 0:>6.1f}s  {fila['texto'] or ''}")
+        if fila["descripcion"]:
+            print(f"      visual: {fila['descripcion']}")
+        if args.rutas:
+            print(f"      {fila['ruta']}")
+    con.close()
+    return 0
 
 
 def cmd_reintentar(args) -> int:
@@ -202,6 +259,17 @@ def cmd_estado(args) -> int:
         "SELECT plataforma, COUNT(*) n FROM items GROUP BY plataforma ORDER BY n DESC"
     ):
         print(f"  {fila['plataforma']:<22} {fila['n']}")
+    mudos = con.execute(
+        "SELECT COUNT(*) n FROM items i LEFT JOIN transcripciones t ON t.item_id = i.id "
+        "LEFT JOIN ocr o ON o.item_id = i.id "
+        "WHERE i.estado IN ('descargado','transcrito') AND o.item_id IS NULL "
+        "AND LENGTH(COALESCE(t.texto,'')) < 200"
+    ).fetchone()["n"]
+    con_ocr = con.execute("SELECT COUNT(*) n FROM ocr").fetchone()["n"]
+    print(f"\nCon texto en pantalla leido: {con_ocr}")
+    if mudos:
+        print(f"Sin voz y pendientes de OCR:  {mudos}  (ejecuta: boveda ocr)")
+
     print("\nPor vigencia (ya analizados):")
     for fila in con.execute(
         "SELECT vigencia_estado, COUNT(*) n, ROUND(AVG(valor_historico), 1) v "
@@ -237,6 +305,20 @@ def construir_parser() -> argparse.ArgumentParser:
         sp.add_argument("--limite", type=int, help="procesa como mucho N items")
         sp.add_argument("--plataforma", help="filtra por plataforma")
         sp.set_defaults(func=cmd_etapa)
+
+    ocr_p = sub.add_parser("ocr", help="lee el texto en pantalla de los videos sin voz")
+    ocr_p.add_argument("--limite", type=int, help="procesa como mucho N items")
+    ocr_p.add_argument("--plataforma", help="filtra por plataforma")
+    ocr_p.add_argument("--todos", action="store_true",
+                       help="tambien los que ya tienen voz transcrita")
+    ocr_p.add_argument("--umbral", type=int,
+                       help="hace OCR si la transcripcion tiene menos de N caracteres")
+    ocr_p.set_defaults(func=cmd_ocr)
+
+    fot = sub.add_parser("fotogramas", help="muestra lo leido fotograma a fotograma")
+    fot.add_argument("item_id", type=int)
+    fot.add_argument("--rutas", action="store_true", help="incluye la ruta de cada imagen")
+    fot.set_defaults(func=cmd_fotogramas)
 
     sub.add_parser("reintentar", help="devuelve a la cola los items con error").set_defaults(
         func=cmd_reintentar)

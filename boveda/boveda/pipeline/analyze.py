@@ -132,7 +132,8 @@ def cliente():
     return anthropic.Anthropic()
 
 
-def _crear_mensaje(cli, cfg: Config, prompt_sistema: str, contenido: str,
+def _crear_mensaje(cli, cfg: Config, prompt_sistema: str,
+                   contenido: str | list[dict[str, Any]],
                    esquema: dict[str, Any] | None) -> Any:
     """Llama a Claude con fallback por rechazo activado (y sin el si no esta disponible)."""
     kwargs: dict[str, Any] = {
@@ -164,6 +165,15 @@ def _errores_sin_fallback() -> tuple[type[BaseException], ...]:
     return (anthropic.BadRequestError, TypeError)
 
 
+def texto_disponible(con: sqlite3.Connection, item_id: int) -> tuple[str, str]:
+    """Devuelve (transcripcion, texto_en_pantalla) de un item."""
+    voz = con.execute(
+        "SELECT texto FROM transcripciones WHERE item_id = ?", (item_id,)
+    ).fetchone()
+    pantalla = con.execute("SELECT texto FROM ocr WHERE item_id = ?", (item_id,)).fetchone()
+    return (voz["texto"] if voz else "") or "", (pantalla["texto"] if pantalla else "") or ""
+
+
 def _contexto(con: sqlite3.Connection, item: sqlite3.Row) -> str:
     fila = con.execute(
         "SELECT texto, segmentos_json FROM transcripciones WHERE item_id = ?", (item["id"],)
@@ -188,10 +198,36 @@ def _contexto(con: sqlite3.Connection, item: sqlite3.Row) -> str:
         f"DURACION: {item['duracion_seg'] or '?'} s",
         f"METRICAS: {item['metricas_json'] or '{}'}",
         f"DESCRIPCION/CAPTION:\n{(item['descripcion'] or '')[:4000]}",
-        f"TRANSCRIPCION:\n{texto}{aviso}",
+        f"TRANSCRIPCION (voz):\n{texto or '(el video no tiene voz)'}{aviso}",
     ]
     if linea_tiempo:
         partes.append(f"SEGMENTOS CON TIEMPO:\n{linea_tiempo}")
+
+    pantalla = con.execute(
+        "SELECT texto, motor FROM ocr WHERE item_id = ?", (item["id"],)
+    ).fetchone()
+    if pantalla and pantalla["texto"]:
+        partes.append(
+            f"TEXTO EN PANTALLA (leido de los fotogramas con {pantalla['motor']}):\n"
+            f"{pantalla['texto'][:LIMITE_TRANSCRIPCION]}"
+        )
+        rotulos = con.execute(
+            "SELECT segundo, texto, descripcion FROM fotogramas "
+            "WHERE item_id = ? AND (texto <> '' OR descripcion <> '') ORDER BY indice",
+            (item["id"],),
+        ).fetchall()
+        if rotulos:
+            partes.append("FOTOGRAMAS CON TIEMPO:\n" + "\n".join(
+                f"{(f['segundo'] or 0):.1f}s: {(f['texto'] or '').strip()}"
+                + (f"  [visual: {f['descripcion']}]" if f["descripcion"] else "")
+                for f in rotulos
+            ))
+        if not texto:
+            partes.append(
+                "NOTA: esta pieza no tiene voz. Todo el mensaje esta en el texto en "
+                "pantalla; analiza el gancho y la estructura sobre ese texto y sobre "
+                "el ritmo con que aparecen los rotulos."
+            )
     return "\n\n".join(partes)
 
 
@@ -207,6 +243,11 @@ def _texto_respuesta(respuesta: Any) -> str:
 
 def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row, cli=None) -> None:
     cli = cli or cliente()
+    voz, pantalla = texto_disponible(con, item["id"])
+    if not voz.strip() and not pantalla.strip():
+        db.marcar(con, item["id"], "error_analisis",
+                  "sin contenido textual: prueba 'boveda ocr' para leer el texto en pantalla")
+        return
     try:
         respuesta = _crear_mensaje(cli, cfg, PROMPT.read_text(encoding="utf-8"),
                                    _contexto(con, item), ESQUEMA)

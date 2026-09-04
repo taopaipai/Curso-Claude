@@ -31,6 +31,10 @@ class Config:
     comando_transcripcion: str | None
     cookies: Path | None
     guardar_video: bool
+    motor_ocr: str
+    max_fotogramas: int
+    umbral_ocr: int
+    idiomas_ocr: str
 
     @property
     def db(self) -> Path:
@@ -45,11 +49,15 @@ class Config:
         return self.home / "audio"
 
     @property
+    def fotogramas(self) -> Path:
+        return self.home / "fotogramas"
+
+    @property
     def exports(self) -> Path:
         return self.home / "exports"
 
     def preparar_directorios(self) -> None:
-        for d in (self.home, self.media, self.audio, self.exports):
+        for d in (self.home, self.media, self.audio, self.fotogramas, self.exports):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -66,4 +74,8 @@ def cargar(home: str | os.PathLike[str] | None = None) -> Config:
         comando_transcripcion=os.environ.get("BOVEDA_TRANSCRIBE_CMD"),
         cookies=Path(cookies).expanduser() if cookies else None,
         guardar_video=os.environ.get("BOVEDA_KEEP_VIDEO", "0") == "1",
+        motor_ocr=os.environ.get("BOVEDA_OCR_ENGINE", "claude"),
+        max_fotogramas=int(os.environ.get("BOVEDA_OCR_MAX_FRAMES", "12")),
+        umbral_ocr=int(os.environ.get("BOVEDA_OCR_UMBRAL", "200")),
+        idiomas_ocr=os.environ.get("BOVEDA_OCR_LANGS", "spa+eng"),
     )

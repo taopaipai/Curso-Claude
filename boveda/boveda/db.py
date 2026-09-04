@@ -94,9 +94,10 @@ def reindexar(con: sqlite3.Connection, item_id: int) -> None:
     fila = con.execute(
         """
         SELECT i.titulo, i.autor, i.descripcion,
-               t.texto AS transcripcion, a.analisis_json
+               t.texto AS transcripcion, o.texto AS pantalla, a.analisis_json
         FROM items i
         LEFT JOIN transcripciones t ON t.item_id = i.id
+        LEFT JOIN ocr o             ON o.item_id = i.id
         LEFT JOIN analisis a        ON a.item_id = i.id
         WHERE i.id = ?
         """,
@@ -111,7 +112,8 @@ def reindexar(con: sqlite3.Connection, item_id: int) -> None:
         (
             fila["titulo"] or "",
             fila["autor"] or "",
-            fila["transcripcion"] or fila["descripcion"] or "",
+            "\n".join(t for t in (fila["transcripcion"], fila["pantalla"],
+                                   fila["descripcion"]) if t),
             _texto_plano(fila["analisis_json"]),
             item_id,
         ),

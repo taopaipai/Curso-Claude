@@ -53,6 +53,31 @@ CREATE TABLE IF NOT EXISTS transcripciones (
     creado_en      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Texto quemado en pantalla, leido de los fotogramas. Para los videos de puro
+-- texto (carruseles animados, reels sin voz) esto ES el contenido: sin esto el
+-- item no tiene nada que analizar.
+CREATE TABLE IF NOT EXISTS ocr (
+    id        INTEGER PRIMARY KEY,
+    item_id   INTEGER NOT NULL UNIQUE REFERENCES items(id) ON DELETE CASCADE,
+    motor     TEXT NOT NULL,                -- claude:<modelo> | tesseract
+    texto     TEXT NOT NULL,                -- texto unificado, en orden de aparicion
+    n_fotogramas INTEGER NOT NULL DEFAULT 0,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Un fotograma clave y lo que se leyo en el. Se guarda por separado para poder
+-- citar "esto aparece en el segundo 7" al reconstruir la estructura.
+CREATE TABLE IF NOT EXISTS fotogramas (
+    id          INTEGER PRIMARY KEY,
+    item_id     INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    indice      INTEGER NOT NULL,
+    segundo     REAL,
+    ruta        TEXT,
+    texto       TEXT,
+    descripcion TEXT,
+    UNIQUE (item_id, indice)
+);
+
 -- El analisis estructurado que devuelve Claude, guardado entero mas
 -- las columnas que mas se filtran, desnormalizadas para consultar rapido.
 CREATE TABLE IF NOT EXISTS analisis (

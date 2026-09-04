@@ -23,10 +23,11 @@ def a_markdown(con: sqlite3.Connection, destino: Path) -> int:
     destino.mkdir(parents=True, exist_ok=True)
     filas = con.execute(
         """
-        SELECT i.*, a.analisis_json, t.texto AS transcripcion
+        SELECT i.*, a.analisis_json, t.texto AS transcripcion, o.texto AS pantalla
         FROM items i
         LEFT JOIN analisis a        ON a.item_id = i.id
         LEFT JOIN transcripciones t ON t.item_id = i.id
+        LEFT JOIN ocr o             ON o.item_id = i.id
         ORDER BY i.id
         """
     ).fetchall()
@@ -92,6 +93,8 @@ def a_markdown(con: sqlite3.Connection, destino: Path) -> int:
         for prod in producciones:
             partes += [f"## Produccion — {prod['formato']} ({prod['nicho'] or 'nicho original'})",
                        prod["cuerpo"], ""]
+        if item["pantalla"]:
+            partes += ["## Texto en pantalla", "", item["pantalla"], ""]
         if item["transcripcion"]:
             partes += ["## Transcripcion", "", item["transcripcion"], ""]
 
@@ -102,10 +105,11 @@ def a_markdown(con: sqlite3.Connection, destino: Path) -> int:
 def a_json(con: sqlite3.Connection, destino: Path) -> int:
     filas = con.execute(
         """
-        SELECT i.*, a.analisis_json, t.texto AS transcripcion
+        SELECT i.*, a.analisis_json, t.texto AS transcripcion, o.texto AS pantalla
         FROM items i
         LEFT JOIN analisis a        ON a.item_id = i.id
         LEFT JOIN transcripciones t ON t.item_id = i.id
+        LEFT JOIN ocr o             ON o.item_id = i.id
         ORDER BY i.id
         """
     ).fetchall()
