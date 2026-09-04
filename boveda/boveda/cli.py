@@ -10,7 +10,8 @@ Flujo tipico:
     boveda buscar "hook de curiosidad"
     boveda producir 42 --formato carrusel --nicho finanzas
     boveda aprobar 7
-    boveda publicar 7 --red instagram --media reel.mp4 --confirmar
+    boveda montar 7 --fondo fondo.jpg       # voz + subtitulos + video
+    boveda publicar 7 --red instagram --confirmar
     boveda exportar --formato md
 """
 
@@ -22,7 +23,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from . import config, db, export, publicador
+import dataclasses
+
+from . import config, db, export, montaje, publicador
 from .ingest import IMPORTADORES
 from .publish import FORMATOS, REDES
 from .pipeline import analyze, download, ocr, repurpose, transcribe
@@ -232,6 +235,37 @@ def cmd_producir(args) -> int:
     fila = con.execute("SELECT cuerpo FROM producciones WHERE id = ?", (prod_id,)).fetchone()
     print(fila["cuerpo"])
     print(f"\n-- guardado como produccion #{prod_id}", file=sys.stderr)
+    con.close()
+    return 0
+
+
+def cmd_montar(args) -> int:
+    cfg, con = _abrir(args)
+    if args.sin_voz:
+        cfg = dataclasses.replace(cfg, motor_voz="ninguna")
+
+    for nombre, ruta in (("fondo", args.fondo), ("musica", args.musica)):
+        if ruta and not Path(ruta).is_file():
+            print(f"No existe el archivo de {nombre}: {ruta}", file=sys.stderr)
+            return 1
+    try:
+        resumen = montaje.montar(
+            cfg, con, args.produccion_id,
+            fondo=Path(args.fondo) if args.fondo else None,
+            musica=Path(args.musica) if args.musica else None,
+            rehacer=args.rehacer,
+        )
+    except (montaje.ErrorMontaje, download.HerramientaFaltante) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    print(f"Video montado: {resumen['video']}")
+    print(f"  {len(resumen['escenas'])} escenas, {resumen['duracion']:.1f} s")
+    for i, escena in enumerate(resumen["escenas"], 1):
+        rotulo = escena.get("rotulo") or ""
+        print(f"  [{i:>2}] {escena.get('duracion', 0):>5.1f}s  {rotulo[:38]:<38} "
+              f"{escena.get('voz', '')[:44]}")
+    print("\nYa puedes publicarlo: el video se usa solo si no pasas --media.")
     con.close()
     return 0
 
@@ -483,6 +517,16 @@ def construir_parser() -> argparse.ArgumentParser:
     pro.add_argument("--nicho")
     pro.add_argument("--notas", help="indicaciones extra para el guionista")
     pro.set_defaults(func=cmd_producir)
+
+    mon = sub.add_parser("montar", help="arma el video: voz, subtitulos y fondo")
+    mon.add_argument("produccion_id", type=int)
+    mon.add_argument("--fondo", help="imagen o video de fondo (por defecto, color plano)")
+    mon.add_argument("--musica", help="pista de fondo, se mezcla baja")
+    mon.add_argument("--sin-voz", dest="sin_voz", action="store_true",
+                     help="solo rotulos y subtitulos, sin sintetizar voz")
+    mon.add_argument("--rehacer", action="store_true",
+                     help="vuelve a desglosar el guion en vez de reusar el desglose")
+    mon.set_defaults(func=cmd_montar)
 
     apr = sub.add_parser("aprobar", help="marca una produccion como lista para publicar")
     apr.add_argument("produccion_id", type=int)

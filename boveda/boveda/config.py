@@ -42,6 +42,11 @@ class Config:
     umbral_ocr: int
     idiomas_ocr: str
     url_base_media: str | None
+    motor_voz: str
+    voz: str
+    comando_voz: str | None
+    resolucion: str
+    fuente: str
 
     @property
     def db(self) -> Path:
@@ -60,6 +65,10 @@ class Config:
         return self.home / "fotogramas"
 
     @property
+    def montajes(self) -> Path:
+        return self.home / "montajes"
+
+    @property
     def publicaciones(self) -> Path:
         return self.home / "publicaciones"
 
@@ -69,7 +78,7 @@ class Config:
 
     def preparar_directorios(self) -> None:
         for d in (self.home, self.media, self.audio, self.fotogramas,
-                  self.publicaciones, self.exports):
+                  self.montajes, self.publicaciones, self.exports):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -94,4 +103,9 @@ def cargar(home: str | os.PathLike[str] | None = None) -> Config:
         umbral_ocr=int(os.environ.get("BOVEDA_OCR_UMBRAL", "200")),
         idiomas_ocr=os.environ.get("BOVEDA_OCR_LANGS", "spa+eng"),
         url_base_media=(os.environ.get("BOVEDA_MEDIA_BASE_URL") or "").rstrip("/") or None,
+        motor_voz=os.environ.get("BOVEDA_TTS_ENGINE", "piper"),
+        voz=os.environ.get("BOVEDA_TTS_VOICE", ""),
+        comando_voz=os.environ.get("BOVEDA_TTS_CMD"),
+        resolucion=os.environ.get("BOVEDA_RESOLUCION", "1080x1920"),
+        fuente=os.environ.get("BOVEDA_FUENTE", "DejaVu Sans"),
     )

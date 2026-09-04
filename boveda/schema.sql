@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS producciones (
 
 CREATE INDEX IF NOT EXISTS idx_producciones_item ON producciones(item_id);
 
+-- El video montado a partir de un guion: voz sintetizada, subtitulos quemados y
+-- fondo. Se guarda el desglose en escenas para poder re-montar cambiando la voz
+-- o el fondo sin volver a pedirle el desglose al modelo.
+CREATE TABLE IF NOT EXISTS montajes (
+    id            INTEGER PRIMARY KEY,
+    produccion_id INTEGER NOT NULL UNIQUE REFERENCES producciones(id) ON DELETE CASCADE,
+    ruta_video    TEXT NOT NULL,
+    ruta_audio    TEXT,
+    ruta_subtitulos TEXT,
+    duracion_seg  REAL,
+    voz           TEXT,
+    escenas_json  TEXT NOT NULL,
+    creado_en     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Cada intento de publicar una produccion en una red. Es el registro de lo que
 -- de verdad salio: nada se publica sin una fila aqui, y nada se publica dos
 -- veces (indice unico sobre lo ya publicado).

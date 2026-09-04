@@ -9,10 +9,12 @@ newsletter.
 
 ```
 guardados → importar → descargar audio → transcribir ─┬─→ analizar → producir
-                                                      │        ↓
-                          videos sin voz → OCR de fotogramas   │
-                                                      └────────┴→ base de datos
-                                                          búsqueda + export
+                                                      │              ↓
+                          videos sin voz → OCR de fotogramas    montar video
+                                                      │       (voz + subtítulos)
+                                                      │              ↓
+                                    base de datos ←───┴──────→ publicar en redes
+                                    búsqueda + export
 ```
 
 ## Por qué está hecho así
@@ -58,7 +60,16 @@ brew install ffmpeg
 sudo apt install ffmpeg
 ```
 
-`yt-dlp` se instala con el paquete. Configura tus claves:
+`yt-dlp` se instala con el paquete. Para que el montaje hable, añade un motor de
+voz (opcional; sin él, `boveda montar --sin-voz` funciona igual):
+
+```bash
+pip install piper-tts
+# y descarga una voz, p. ej. es_ES-sharvard-medium.onnx, a la ruta que pongas
+# en BOVEDA_TTS_VOICE
+```
+
+Configura tus claves:
 
 ```bash
 cp .env.example .env
@@ -204,6 +215,57 @@ la estructura y el mecanismo, nunca las frases, y descarta los datos que el
 análisis marcó como caducados o no verificables. Cada producción queda guardada
 en la tabla `producciones` con estado `borrador`.
 
+### Montar el video (voz y subtítulos)
+
+El guion es texto. `boveda montar` lo convierte en un mp4 vertical listo para
+subir:
+
+```bash
+boveda montar 7                          # fondo de color plano
+boveda montar 7 --fondo fondo.jpg        # imagen o video de fondo
+boveda montar 7 --fondo broll.mp4 --musica pista.m4a
+boveda montar 7 --sin-voz                # solo rótulos y subtítulos
+```
+
+Cuatro pasos, todos en tu máquina salvo el primero:
+
+1. **Desglose.** Claude convierte el guion en escenas con salida estructurada:
+   qué se dice exactamente (texto limpio y locutable, sin acotaciones) y qué
+   rótulo aparece en pantalla. El desglose se guarda: cambiar el fondo o la voz
+   y volver a montar **no** cuesta otra llamada al modelo, salvo `--rehacer`.
+2. **Voz.** Se sintetiza cada escena por separado, lo que da la duración real de
+   cada una — que es justo lo que hace falta para cuadrar los subtítulos.
+3. **Subtítulos.** Un archivo ASS con dos estilos: el rótulo grande arriba y el
+   subtítulo abajo, repartido en líneas cortas proporcionalmente a lo que se
+   tarda en decir cada una.
+4. **ffmpeg** junta fondo, voz, música y subtítulos quemados en un 1080×1920 a
+   30 fps con audio AAC.
+
+**La voz la pones tú**, en `BOVEDA_TTS_ENGINE`. Anthropic no ofrece síntesis de
+voz, así que aquí no hay un motor "de la casa":
+
+- `piper` (recomendado): local, gratis y con voces en español que suenan bien.
+  `pip install piper-tts`, descarga un modelo `.onnx` y apúntalo con
+  `BOVEDA_TTS_VOICE`.
+- `cmd`: cualquier otro TTS (ElevenLabs, Azure, el que uses) a través de
+  `BOVEDA_TTS_CMD`, con `{texto}` y `{salida}`. Solo tiene que escribir un WAV.
+- `ninguna`: sin voz. Cada escena dura lo que se tarda en leerla y el video sale
+  con rótulos y subtítulos sobre música. Útil para los formatos mudos, y es el
+  modo con el que se prueban las piezas sin gastar nada.
+
+El fondo horizontal se recorta a vertical automáticamente (`scale` + `crop`), y
+un video de fondo más corto que la voz se repite hasta cubrirla.
+
+**Se enlaza solo con la publicación:** si no pasas `--media`, `boveda publicar`
+coge el video montado de esa producción.
+
+```bash
+boveda producir 42 --formato reel --nicho finanzas
+boveda montar 8 --fondo marca.jpg
+boveda aprobar 8
+boveda publicar 8 --red tiktok --confirmar
+```
+
 ### Publicar en nuestras redes
 
 ```bash
@@ -318,9 +380,11 @@ boveda/
       repurpose.py        generación de contenido nuevo
     prompts/              los prompts, en archivos aparte para que los edites
     export.py             markdown y json
+    montaje.py            guion -> escenas -> voz + subtítulos + mp4
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  40 pruebas, sin red (Claude y las APIs de redes simulados)
+  tests/                  55 pruebas, sin red (Claude y las APIs de redes simulados;
+                          el montaje se verifica con ffmpeg de verdad)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
@@ -333,7 +397,10 @@ python -m pytest        # correr las pruebas
 - El OCR lee fotogramas sueltos, no el video en movimiento: un texto que aparece
   y desaparece entre dos fotogramas clave se pierde. Sube
   `BOVEDA_OCR_MAX_FRAMES` en las piezas donde importe.
-- No monta el video: publica el archivo que tú le pases con `--media`. Generar
-  el reel a partir del guion (voz, cortes, subtítulos) sigue siendo manual.
+- El montaje no busca b-roll: el fondo es el que tú le pases. No hay banco de
+  imágenes ni generación de vídeo.
+- Los subtítulos se reparten por longitud de texto dentro de cada escena, no por
+  alineación palabra a palabra con el audio. Cuadra bien porque cada escena se
+  sintetiza por separado, pero no es karaoke.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez
   cuentas). La dedup es por URL.

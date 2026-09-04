@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import montaje
 from .config import Config
 from .publish import FORMATOS, REDES
 from .publish.base import ErrorRed, Publicacion, Resultado
@@ -117,6 +118,9 @@ def _armar(cfg: Config, con: sqlite3.Connection, fila: sqlite3.Row) -> Publicaci
     analisis = json.loads(prod["analisis_json"]) if prod["analisis_json"] else {}
 
     media = Path(fila["media_ruta"]) if fila["media_ruta"] else None
+    # Si no se paso un medio a mano, se usa el video montado de esta produccion.
+    if media is None:
+        media = montaje.video_de(con, prod["id"])
     url = fila["media_url"]
     # Si sirves los videos montados desde una carpeta publica, la URL se deduce.
     if not url and media and cfg.url_base_media:
