@@ -221,8 +221,10 @@ El guion es texto. `boveda montar` lo convierte en un mp4 vertical listo para
 subir:
 
 ```bash
-boveda montar 7                          # fondo de color plano
-boveda montar 7 --fondo fondo.jpg        # imagen o video de fondo
+boveda montar 7                          # b-roll automático, un clip por escena
+boveda montar 7 --broll local            # solo de tu videoteca
+boveda montar 7 --sin-broll              # un fondo plano y ya
+boveda montar 7 --fondo fondo.jpg        # tu propia imagen o video
 boveda montar 7 --fondo broll.mp4 --musica pista.m4a
 boveda montar 7 --sin-voz                # solo rótulos y subtítulos
 boveda montar 7 --sin-karaoke            # subtítulos por bloques
@@ -231,8 +233,8 @@ boveda montar 7 --sin-karaoke            # subtítulos por bloques
 Cuatro pasos, todos en tu máquina salvo el primero:
 
 1. **Desglose.** Claude convierte el guion en escenas con salida estructurada:
-   qué se dice exactamente (texto limpio y locutable, sin acotaciones) y qué
-   rótulo aparece en pantalla. El desglose se guarda: cambiar el fondo o la voz
+   qué se dice exactamente (texto limpio y locutable, sin acotaciones), qué
+   rótulo aparece en pantalla y qué buscar como fondo. El desglose se guarda: cambiar el fondo o la voz
    y volver a montar **no** cuesta otra llamada al modelo, salvo `--rehacer`.
 2. **Voz.** Se sintetiza cada escena por separado, lo que da la duración real de
    cada una — que es justo lo que hace falta para cuadrar los subtítulos.
@@ -240,8 +242,38 @@ Cuatro pasos, todos en tu máquina salvo el primero:
    sintetizado contra el texto que ya sabemos que se dice, y devuelve el
    milisegundo exacto en que empieza y acaba cada palabra. Con eso se generan
    subtítulos de karaoke: cada palabra se enciende justo cuando se pronuncia.
-4. **ffmpeg** junta fondo, voz, música y subtítulos quemados en un 1080×1920 a
-   30 fps con audio AAC.
+4. **B-roll.** Un clip de fondo por escena, recortado a su duración exacta, de
+   modo que la imagen corta justo donde cambia lo que se dice.
+5. **ffmpeg** junta todo en un 1080×1920 a 30 fps con audio AAC.
+
+**El fondo se busca solo.** El desglose incluye, para cada escena, dos a cuatro
+palabras **en inglés** de qué plano pedir (los bancos indexan en inglés):
+`person typing laptop`, `hourglass desk`. Con eso se busca un clip por escena en
+este orden, y se para en el primero que responda:
+
+| Origen | Qué es |
+|---|---|
+| `local` | Tu propia videoteca. El **nombre del archivo hace de etiqueta**: `oficina-persona-ordenador.mp4` gana para "persona ordenador". Gratis, tuyo, y sin depender de nadie. |
+| `pexels` | Banco de stock gratuito. `PEXELS_API_KEY`. Pide vertical y se queda con el archivo ≥1080 de alto. |
+| `pixabay` | Banco de stock gratuito. `PIXABAY_API_KEY`. |
+| `generado` | Degradado en movimiento hecho con ffmpeg. El color sale de la propia búsqueda, así que cada escena tiene su tono. **Siempre funciona**: es el suelo del que no se cae. |
+
+Lo descargado se cachea en `data/broll/`, así que remontar el mismo guion no
+vuelve a bajar nada. Si un banco falla —cuota agotada, caído—, el aviso sale por
+pantalla y se pasa al siguiente origen: **el montaje nunca se queda sin fondo**.
+
+El b-roll se oscurece un 12 % (`BOVEDA_BROLL_OSCURECER`) antes de poner el
+texto. No es cosmético: sobre un plano claro, los subtítulos blancos se pierden
+aunque lleven contorno.
+
+Cuando un clip viene de un banco, se escribe un `creditos.txt` junto al video
+con el autor y el enlace de cada uno. Pexels y Pixabay permiten uso comercial
+gratuito y no exigen atribución, pero la piden como cortesía y cuesta nada
+dársela.
+
+> **Lo que nunca se usa de fondo es el video original que guardaste.** Ese
+> material es de otro; reutilizarlo es justo lo que este proyecto no hace. Del
+> guardado se aprovecha la estructura y el análisis, nunca los fotogramas.
 
 **Los subtítulos son karaoke de verdad.** Como el texto se sintetiza aquí, no
 hace falta transcribir y cruzar los dedos: se le da a whisperx el audio y el
@@ -407,10 +439,12 @@ boveda/
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
     alineacion.py         whisperx: alineación forzada palabra por palabra
+    broll.py              busca y cachea el clip de fondo de cada escena
+    web.py                HTTP compartido por las redes y los bancos de b-roll
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  74 pruebas, sin red (Claude, whisperx y las APIs de
-                          redes simulados; el montaje se verifica con ffmpeg real)
+  tests/                  91 pruebas, sin red (Claude, whisperx, redes y bancos
+                          de b-roll simulados; el vídeo se monta con ffmpeg real)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
@@ -423,8 +457,10 @@ python -m pytest        # correr las pruebas
 - El OCR lee fotogramas sueltos, no el video en movimiento: un texto que aparece
   y desaparece entre dos fotogramas clave se pierde. Sube
   `BOVEDA_OCR_MAX_FRAMES` en las piezas donde importe.
-- El montaje no busca b-roll: el fondo es el que tú le pases. No hay banco de
-  imágenes ni generación de vídeo.
+- El b-roll son planos de stock genéricos, no imágenes generadas a medida del
+  guion. Si quieres algo exacto, tu videoteca (`--broll local`) da mejor
+  resultado que cualquier banco.
+- Los cortes entre clips son secos, sin transiciones ni efecto Ken Burns.
 - La alineación corre en CPU por defecto y no es instantánea: la primera escena
   paga además la carga del modelo wav2vec2. Con GPU, `BOVEDA_ALIGN_DEVICE=cuda`.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez

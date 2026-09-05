@@ -245,6 +245,8 @@ def cmd_montar(args) -> int:
         cfg = dataclasses.replace(cfg, motor_voz="ninguna")
     if args.sin_karaoke:
         cfg = dataclasses.replace(cfg, karaoke="no")
+    if args.broll:
+        cfg = dataclasses.replace(cfg, broll=args.broll)
 
     for nombre, ruta in (("fondo", args.fondo), ("musica", args.musica)):
         if ruta and not Path(ruta).is_file():
@@ -256,6 +258,7 @@ def cmd_montar(args) -> int:
             fondo=Path(args.fondo) if args.fondo else None,
             musica=Path(args.musica) if args.musica else None,
             rehacer=args.rehacer,
+            con_broll=not args.sin_broll,
         )
     except (montaje.ErrorMontaje, download.HerramientaFaltante) as exc:
         print(exc, file=sys.stderr)
@@ -263,15 +266,18 @@ def cmd_montar(args) -> int:
 
     subtitulos = ("karaoke, palabra por palabra" if resumen["karaoke"]
                   else "por bloques (sin alineacion)")
+    origenes = ", ".join(sorted({c.origen for c in resumen["clips"]})) or "fondo fijo"
     print(f"Video montado: {resumen['video']}")
     print(f"  {len(resumen['escenas'])} escenas, {resumen['duracion']:.1f} s, "
           f"subtitulos {subtitulos}")
+    print(f"  b-roll: {origenes}")
     for aviso in resumen["avisos"]:
         print(f"  ! {aviso}", file=sys.stderr)
     for i, escena in enumerate(resumen["escenas"], 1):
         rotulo = escena.get("rotulo") or ""
-        print(f"  [{i:>2}] {escena.get('duracion', 0):>5.1f}s  {rotulo[:38]:<38} "
-              f"{escena.get('voz', '')[:44]}")
+        fuente = (escena.get("broll") or {}).get("origen", "-")
+        print(f"  [{i:>2}] {escena.get('duracion', 0):>5.1f}s  {fuente:<9} "
+              f"{rotulo[:30]:<30} {escena.get('voz', '')[:40]}")
     print("\nYa puedes publicarlo: el video se usa solo si no pasas --media.")
     con.close()
     return 0
@@ -529,6 +535,10 @@ def construir_parser() -> argparse.ArgumentParser:
     mon.add_argument("produccion_id", type=int)
     mon.add_argument("--fondo", help="imagen o video de fondo (por defecto, color plano)")
     mon.add_argument("--musica", help="pista de fondo, se mezcla baja")
+    mon.add_argument("--broll", choices=("auto", "local", "pexels", "pixabay", "generado"),
+                     help="de donde sacar el fondo de cada escena")
+    mon.add_argument("--sin-broll", dest="sin_broll", action="store_true",
+                     help="un solo fondo plano en vez de un clip por escena")
     mon.add_argument("--sin-voz", dest="sin_voz", action="store_true",
                      help="solo rotulos y subtitulos, sin sintetizar voz")
     mon.add_argument("--sin-karaoke", dest="sin_karaoke", action="store_true",

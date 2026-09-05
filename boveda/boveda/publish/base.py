@@ -1,22 +1,20 @@
 """Piezas comunes de los publicadores: HTTP, tipos y errores.
 
-Se usa urllib de la libreria estandar a proposito: son cuatro llamadas HTTP por
-red y no merece la pena arrastrar otra dependencia solo para esto.
+El transporte HTTP vive en `boveda.web`, compartido con la busqueda de b-roll;
+aqui solo se le pone encima el nombre de la red para que los errores digan quien
+fallo.
 """
 
 from __future__ import annotations
 
-import json
-import mimetypes
 import os
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TIEMPO_ESPERA = 180
+from .. import web
+
+TIEMPO_ESPERA = web.TIEMPO_ESPERA
 
 
 class ErrorRed(RuntimeError):
@@ -59,51 +57,19 @@ def env(clave: str, red: str, obligatorio: bool = True) -> str:
     return valor
 
 
-def pedir(url: str, metodo: str = "GET", *, red: str = "http",
-          cabeceras: dict[str, str] | None = None,
-          json_datos: Any = None, form: dict[str, Any] | None = None,
-          cuerpo: bytes | None = None, tipo: str | None = None,
-          timeout: int = TIEMPO_ESPERA) -> Any:
-    """Una peticion HTTP. Devuelve el JSON de la respuesta (o los bytes crudos)."""
-    cabeceras = dict(cabeceras or {})
-    datos: bytes | None = cuerpo
-
-    if json_datos is not None:
-        datos = json.dumps(json_datos).encode("utf-8")
-        cabeceras.setdefault("Content-Type", "application/json")
-    elif form is not None:
-        datos = urllib.parse.urlencode(
-            {k: v for k, v in form.items() if v is not None}
-        ).encode("utf-8")
-        cabeceras.setdefault("Content-Type", "application/x-www-form-urlencoded")
-    elif tipo:
-        cabeceras.setdefault("Content-Type", tipo)
-
-    peticion = urllib.request.Request(url, data=datos, headers=cabeceras, method=metodo)
+def pedir(url: str, metodo: str = "GET", *, red: str = "http", **kwargs: Any) -> Any:
     try:
-        with urllib.request.urlopen(peticion, timeout=timeout) as respuesta:
-            crudo = respuesta.read()
-            cabecera_tipo = respuesta.headers.get("Content-Type", "")
-            if "json" in cabecera_tipo and crudo:
-                return json.loads(crudo)
-            return {"_bytes": crudo, "_headers": dict(respuesta.headers),
-                    "_status": respuesta.status}
-    except urllib.error.HTTPError as exc:
-        detalle = exc.read().decode("utf-8", "replace")[:800]
-        raise ErrorRed(red, f"HTTP {exc.code}: {detalle}", exc.code) from exc
-    except urllib.error.URLError as exc:
-        raise ErrorRed(red, f"no se pudo conectar: {exc.reason}") from exc
+        return web.pedir(url, metodo, **kwargs)
+    except web.ErrorHttp as exc:
+        raise ErrorRed(red, str(exc), exc.codigo) from exc
 
 
 def subir_archivo(url: str, ruta: Path, *, red: str, metodo: str = "PUT",
                   cabeceras: dict[str, str] | None = None) -> Any:
-    """Sube un archivo entero de una vez. Los videos de redes caben de sobra."""
-    datos = ruta.read_bytes()
-    tipo = mimetypes.guess_type(ruta.name)[0] or "application/octet-stream"
-    cabeceras = dict(cabeceras or {})
-    cabeceras.setdefault("Content-Type", tipo)
-    cabeceras.setdefault("Content-Length", str(len(datos)))
-    return pedir(url, metodo, red=red, cabeceras=cabeceras, cuerpo=datos)
+    try:
+        return web.subir_archivo(url, ruta, metodo=metodo, cabeceras=cabeceras)
+    except web.ErrorHttp as exc:
+        raise ErrorRed(red, str(exc), exc.codigo) from exc
 
 
 def exigir_media(pub: Publicacion, red: str, clase: str = "video") -> Path:

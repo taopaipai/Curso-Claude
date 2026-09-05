@@ -52,7 +52,8 @@ def test_desglosar_pide_el_esquema_y_devuelve_escenas(entorno):
 
     assert [e["rotulo"] for e in escenas] == ["No es una lista", "Regla de 2 minutos"]
     esquema = cli.ultimo["output_config"]["format"]["schema"]
-    assert esquema["properties"]["escenas"]["items"]["required"] == ["voz", "rotulo", "nota_visual"]
+    assert esquema["properties"]["escenas"]["items"]["required"] == [
+        "voz", "rotulo", "nota_visual", "busqueda_broll"]
     assert "guion" in cli.ultimo["messages"][0]["content"].lower()
 
 

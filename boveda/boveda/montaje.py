@@ -26,7 +26,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from . import alineacion
+from . import alineacion, broll as broll_mod
 from .config import Config
 from .pipeline.analyze import _crear_mensaje, _texto_respuesta, cliente
 from .pipeline.download import HerramientaFaltante
@@ -47,8 +47,9 @@ ESQUEMA: dict[str, Any] = {
                     "voz": {"type": "string"},
                     "rotulo": {"type": "string"},
                     "nota_visual": {"type": "string"},
+                    "busqueda_broll": {"type": "string"},
                 },
-                "required": ["voz", "rotulo", "nota_visual"],
+                "required": ["voz", "rotulo", "nota_visual", "busqueda_broll"],
                 "additionalProperties": False,
             },
         },
@@ -70,6 +71,10 @@ Para cada escena:
   que se dice. Cadena vacia solo si de verdad no debe haber rotulo.
 - `nota_visual`: que se ve, en una linea. Es documentacion para quien grabe;
   no aparece en el video.
+- `busqueda_broll`: 2 a 4 palabras EN INGLES para buscar el plano de fondo en un
+  banco de video de stock (los bancos indexan en ingles). Cosas filmables y
+  concretas: "person typing laptop", "hourglass desk", "city night traffic".
+  Nada abstracto ("success", "productivity") ni nombres propios.
 
 Corta por unidades de sentido: cada escena es una frase o dos, lo que se dice de
 un tiron. El gancho va siempre en la primera escena. No inventes contenido que
@@ -361,6 +366,58 @@ def _pista_de_voz(cfg: Config, escenas: list[dict[str, Any]], trabajo: Path,
     return voz, duracion_wav(voz)
 
 
+def construir_broll(cfg: Config, escenas: list[dict[str, Any]], trabajo: Path,
+                    ffmpeg: str, avisos: list[str] | None = None
+                    ) -> tuple[Path, list[Any]]:
+    """Un clip por escena, recortado a vertical y encadenado en un solo video.
+
+    Cada segmento dura lo que dura su escena mas la pausa que la sigue, para que
+    el corte de imagen caiga justo donde cambia lo que se dice.
+    """
+    avisos = avisos if avisos is not None else []
+    ancho, _, alto = cfg.resolucion.partition("x")
+    segmentos: list[Path] = []
+    clips: list[Any] = []
+
+    for indice, escena in enumerate(escenas):
+        duracion = float(escena.get("duracion") or duracion_estimada(escena.get("voz", "")))
+        if indice < len(escenas) - 1:
+            duracion += PAUSA_ENTRE_ESCENAS
+        consulta = (escena.get("busqueda_broll") or "").strip() or broll_mod.terminos(
+            escena.get("nota_visual", ""), escena.get("rotulo", ""))
+
+        clip = broll_mod.buscar(cfg, consulta, duracion, avisos)
+        clips.append(clip)
+        escena["broll"] = {"origen": clip.origen, "consulta": consulta,
+                           "autor": clip.autor, "url": clip.url}
+
+        segmento = trabajo / f"bg_{indice:03d}.mp4"
+        subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+             "-stream_loop", "-1", "-t", f"{duracion:.3f}", "-i", str(clip.ruta),
+             "-an", "-vf",
+             # El oscurecido no es cosmetico: sobre un b-roll claro los
+             # subtitulos blancos se pierden aunque lleven contorno.
+             f"scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
+             f"crop={ancho}:{alto},setsar=1,fps=30,"
+             f"eq=brightness=-{cfg.broll_oscurecer:.3f}:saturation=0.95",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+             "-pix_fmt", "yuv420p", "-t", f"{duracion:.3f}", str(segmento)],
+            check=True, capture_output=True,
+        )
+        segmentos.append(segmento)
+
+    lista = trabajo / "fondo.txt"
+    lista.write_text("".join(f"file '{s.name}'\n" for s in segmentos), encoding="utf-8")
+    fondo = trabajo / "fondo.mp4"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "concat", "-safe", "0", "-i", str(lista), "-c", "copy", str(fondo)],
+        check=True, capture_output=True, cwd=trabajo,
+    )
+    return fondo, clips
+
+
 def _entrada_de_fondo(cfg: Config, fondo: Path | None, duracion: float) -> list[str]:
     if fondo is None:
         color = "0x0F172A"
@@ -374,7 +431,7 @@ def _entrada_de_fondo(cfg: Config, fondo: Path | None, duracion: float) -> list[
 def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
            fondo: Path | None = None, musica: Path | None = None,
            escenas: list[dict[str, Any]] | None = None, cli=None,
-           rehacer: bool = False) -> dict[str, Any]:
+           rehacer: bool = False, con_broll: bool | None = None) -> dict[str, Any]:
     """Arma el video de una produccion y lo registra. Devuelve el resumen."""
     ffmpeg = _ffmpeg()
 
@@ -387,7 +444,8 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
         if guardado and not rehacer:
             # Los tiempos y las palabras del montaje anterior no valen: la voz
             # se vuelve a sintetizar ahora. Solo se reutiliza el desglose.
-            escenas = [{k: v for k, v in e.items() if k not in ("duracion", "palabras")}
+            escenas = [{k: v for k, v in e.items()
+                        if k not in ("duracion", "palabras", "broll")}
                        for e in json.loads(guardado["escenas_json"])]
         else:
             escenas = desglosar(cfg, con, produccion_id, cli)
@@ -401,6 +459,16 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
     voz, duracion = _pista_de_voz(cfg, escenas, trabajo, ffmpeg, avisos)
     subtitulos = trabajo / "subtitulos.ass"
     construir_ass(escenas, subtitulos, cfg)
+
+    # El b-roll se busca despues de la voz porque necesita la duracion real de
+    # cada escena para recortar cada clip a su medida.
+    clips: list[Any] = []
+    quiere_broll = cfg.broll != "no" if con_broll is None else con_broll
+    if fondo is None and quiere_broll:
+        fondo, clips = construir_broll(cfg, escenas, trabajo, ffmpeg, avisos)
+        texto_creditos = broll_mod.creditos(clips)
+        if texto_creditos:
+            (trabajo / "creditos.txt").write_text(texto_creditos, encoding="utf-8")
 
     ancho, _, alto = cfg.resolucion.partition("x")
     cadena = (f"[0:v]scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
@@ -440,7 +508,7 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
     )
     con.commit()
     return {"video": salida, "duracion": duracion, "escenas": escenas,
-            "subtitulos": subtitulos, "avisos": avisos,
+            "subtitulos": subtitulos, "avisos": avisos, "clips": clips,
             "karaoke": any(e.get("palabras") for e in escenas)}
 
 

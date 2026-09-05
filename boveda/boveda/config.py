@@ -50,6 +50,9 @@ class Config:
     karaoke: str
     idioma_voz: str
     dispositivo_alineacion: str
+    broll: str
+    broll_propio: str | None
+    broll_oscurecer: float
 
     @property
     def db(self) -> Path:
@@ -68,6 +71,10 @@ class Config:
         return self.home / "fotogramas"
 
     @property
+    def cache_broll(self) -> Path:
+        return self.home / "broll"
+
+    @property
     def montajes(self) -> Path:
         return self.home / "montajes"
 
@@ -81,7 +88,8 @@ class Config:
 
     def preparar_directorios(self) -> None:
         for d in (self.home, self.media, self.audio, self.fotogramas,
-                  self.montajes, self.publicaciones, self.exports):
+                  self.montajes, self.cache_broll,
+                  self.publicaciones, self.exports):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -114,4 +122,7 @@ def cargar(home: str | os.PathLike[str] | None = None) -> Config:
         karaoke=os.environ.get("BOVEDA_KARAOKE", "auto"),
         idioma_voz=os.environ.get("BOVEDA_IDIOMA_VOZ", "es"),
         dispositivo_alineacion=os.environ.get("BOVEDA_ALIGN_DEVICE", "auto"),
+        broll=os.environ.get("BOVEDA_BROLL", "auto"),
+        broll_propio=os.environ.get("BOVEDA_BROLL_DIR") or None,
+        broll_oscurecer=float(os.environ.get("BOVEDA_BROLL_OSCURECER", "0.12")),
     )
