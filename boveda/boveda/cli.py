@@ -12,6 +12,7 @@ Flujo tipico:
     boveda aprobar 7
     boveda montar 7 --fondo fondo.jpg       # voz + subtitulos + video
     boveda publicar 7 --red instagram --confirmar
+    boveda panel                            # el tablero, en el navegador
     boveda exportar --formato md
 """
 
@@ -26,7 +27,7 @@ from pathlib import Path
 import dataclasses
 
 from . import comentarios as com
-from . import config, db, export, montaje, publicador
+from . import config, db, export, montaje, panel, publicador
 from .ingest import IMPORTADORES
 from .publish import FORMATOS, REDES
 from .pipeline import analyze, download, ocr, repurpose, transcribe
@@ -237,6 +238,13 @@ def cmd_producir(args) -> int:
     print(fila["cuerpo"])
     print(f"\n-- guardado como produccion #{prod_id}", file=sys.stderr)
     con.close()
+    return 0
+
+
+def cmd_panel(args) -> int:
+    cfg, con = _abrir(args)
+    con.close()
+    panel.arrancar(cfg, puerto=args.puerto, abrir=not args.sin_abrir)
     return 0
 
 
@@ -694,6 +702,12 @@ def construir_parser() -> argparse.ArgumentParser:
     exp.add_argument("--formato", choices=("md", "json"), default="md")
     exp.add_argument("--destino")
     exp.set_defaults(func=cmd_exportar)
+
+    pan = sub.add_parser("panel", help="abre el tablero kanban en el navegador")
+    pan.add_argument("--puerto", type=int, default=8765)
+    pan.add_argument("--sin-abrir", dest="sin_abrir", action="store_true",
+                     help="no abre el navegador solo")
+    pan.set_defaults(func=cmd_panel)
 
     sub.add_parser("estado", help="resumen de la boveda").set_defaults(func=cmd_estado)
     return p

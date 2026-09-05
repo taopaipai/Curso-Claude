@@ -77,6 +77,38 @@ cp .env.example .env
 boveda init
 ```
 
+## El panel
+
+```bash
+boveda panel            # abre el tablero en el navegador
+```
+
+Un kanban con las etapas reales del recorrido: **Registrado → Descargado →
+Transcrito → Analizado → Borrador → Aprobado → En cola → Publicado**, más una
+columna de errores que solo aparece cuando hay alguno. Las cuatro primeras
+columnas son guardados; las cuatro últimas, producciones tuyas derivadas de
+ellos. Es el mismo camino que hace el material: entra como favorito de otro y
+sale como publicación tuya.
+
+Cada tarjeta lleva lo justo para decidir de un vistazo: plataforma, colección,
+vistas, likes, guardados, cuántos comentarios se capturaron y el veredicto de
+vigencia (`atemporal 5/5`, `caducado 3/5`). Al hacer clic se abre la ficha
+completa: métricas con su historial de instantáneas, gancho, estructura con
+tiempos, qué es aplicable para nosotros y para enseñar, los comentarios más
+votados con cuánto tardaron en llegar, las producciones y sus publicaciones.
+
+Arriba filtras por plataforma, por colección o buscando texto — que es como
+trabajas por nichos. Desde las tarjetas puedes aprobar un borrador, devolverlo,
+reintentar lo que falló o quitar algo de la cola.
+
+**Lo que el panel no hace es publicar.** Publicar es lo único que no se puede
+deshacer, y un clic de más en un navegador no debería sacar algo a tus redes. El
+panel te muestra el comando exacto y tú lo confirmas en la terminal.
+
+Va en `127.0.0.1` a propósito y sin dependencias: `http.server` de la librería
+estándar y una página de HTML plano. No lo expongas a la red — tu bóveda tiene
+tus guardados, tus análisis y tus credenciales cerca.
+
 ## Cómo sacar tus guardados de cada plataforma
 
 Ninguna de las tres tiene API pública de guardados. La vía estable —y la única
@@ -483,6 +515,7 @@ boveda/
       repurpose.py        generación de contenido nuevo
     prompts/              los prompts, en archivos aparte para que los edites
     comentarios.py        top 20 comentarios, métricas y sus instantáneas
+    panel/                el tablero kanban: servidor local + una página
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
     alineacion.py         whisperx: alineación forzada palabra por palabra
@@ -490,8 +523,9 @@ boveda/
     web.py                HTTP compartido por las redes y los bancos de b-roll
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  110 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
-                          bancos simulados; el vídeo se monta con ffmpeg real)
+  tests/                  124 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
+                          bancos simulados; el vídeo se monta con ffmpeg real y
+                          el panel se prueba levantando el servidor)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
@@ -508,7 +542,8 @@ python -m pytest        # correr las pruebas
   guion. Si quieres algo exacto, tu videoteca (`--broll local`) da mejor
   resultado que cualquier banco.
 - Los cortes entre clips son secos, sin transiciones ni efecto Ken Burns.
-- No hay panel visual todavía: todo se maneja desde la línea de comandos.
+- El panel no arrastra tarjetas entre columnas: la etapa la decide el pipeline,
+  no el ratón. Lo que sí se hace con un clic es aprobar, devolver y reintentar.
 - La alineación corre en CPU por defecto y no es instantánea: la primera escena
   paga además la carga del modelo wav2vec2. Con GPU, `BOVEDA_ALIGN_DEVICE=cuda`.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez
