@@ -225,6 +225,7 @@ boveda montar 7                          # fondo de color plano
 boveda montar 7 --fondo fondo.jpg        # imagen o video de fondo
 boveda montar 7 --fondo broll.mp4 --musica pista.m4a
 boveda montar 7 --sin-voz                # solo rótulos y subtítulos
+boveda montar 7 --sin-karaoke            # subtítulos por bloques
 ```
 
 Cuatro pasos, todos en tu máquina salvo el primero:
@@ -235,11 +236,35 @@ Cuatro pasos, todos en tu máquina salvo el primero:
    y volver a montar **no** cuesta otra llamada al modelo, salvo `--rehacer`.
 2. **Voz.** Se sintetiza cada escena por separado, lo que da la duración real de
    cada una — que es justo lo que hace falta para cuadrar los subtítulos.
-3. **Subtítulos.** Un archivo ASS con dos estilos: el rótulo grande arriba y el
-   subtítulo abajo, repartido en líneas cortas proporcionalmente a lo que se
-   tarda en decir cada una.
+3. **Subtítulos palabra por palabra.** whisperx alinea el audio recién
+   sintetizado contra el texto que ya sabemos que se dice, y devuelve el
+   milisegundo exacto en que empieza y acaba cada palabra. Con eso se generan
+   subtítulos de karaoke: cada palabra se enciende justo cuando se pronuncia.
 4. **ffmpeg** junta fondo, voz, música y subtítulos quemados en un 1080×1920 a
    30 fps con audio AAC.
+
+**Los subtítulos son karaoke de verdad.** Como el texto se sintetiza aquí, no
+hace falta transcribir y cruzar los dedos: se le da a whisperx el audio y el
+texto conocido, y hace **alineación forzada** —la palabra cae sobre su límite
+real en el audio, no sobre una estimación—. Cada palabra se ilumina hasta que
+empieza la siguiente, así que el resaltado avanza sin parpadeos.
+
+whisperx arrastra torch, así que es opcional:
+
+```bash
+pip install "boveda[karaoke]"
+```
+
+- `BOVEDA_KARAOKE=auto` (por defecto): se usa si whisperx está instalado.
+- `BOVEDA_KARAOKE=si`: obligatorio; si falta, el montaje falla en vez de
+  degradar en silencio.
+- `BOVEDA_KARAOKE=no` (o `--sin-karaoke`): subtítulos por bloques, repartidos
+  por longitud de texto.
+
+Si una escena no se puede alinear —pasa con cifras y siglas—, esa escena cae
+sola a subtítulos por bloques, el aviso sale por pantalla y el resto del video
+se monta igual. Las palabras que whisperx devuelve sin tiempo se interpolan
+entre sus vecinas en vez de tirar la línea entera.
 
 **La voz la pones tú**, en `BOVEDA_TTS_ENGINE`. Anthropic no ofrece síntesis de
 voz, así que aquí no hay un motor "de la casa":
@@ -381,10 +406,11 @@ boveda/
     prompts/              los prompts, en archivos aparte para que los edites
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
+    alineacion.py         whisperx: alineación forzada palabra por palabra
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  55 pruebas, sin red (Claude y las APIs de redes simulados;
-                          el montaje se verifica con ffmpeg de verdad)
+  tests/                  74 pruebas, sin red (Claude, whisperx y las APIs de
+                          redes simulados; el montaje se verifica con ffmpeg real)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
@@ -399,8 +425,7 @@ python -m pytest        # correr las pruebas
   `BOVEDA_OCR_MAX_FRAMES` en las piezas donde importe.
 - El montaje no busca b-roll: el fondo es el que tú le pases. No hay banco de
   imágenes ni generación de vídeo.
-- Los subtítulos se reparten por longitud de texto dentro de cada escena, no por
-  alineación palabra a palabra con el audio. Cuadra bien porque cada escena se
-  sintetiza por separado, pero no es karaoke.
+- La alineación corre en CPU por defecto y no es instantánea: la primera escena
+  paga además la carga del modelo wav2vec2. Con GPU, `BOVEDA_ALIGN_DEVICE=cuda`.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez
   cuentas). La dedup es por URL.

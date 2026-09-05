@@ -47,6 +47,9 @@ class Config:
     comando_voz: str | None
     resolucion: str
     fuente: str
+    karaoke: str
+    idioma_voz: str
+    dispositivo_alineacion: str
 
     @property
     def db(self) -> Path:
@@ -108,4 +111,7 @@ def cargar(home: str | os.PathLike[str] | None = None) -> Config:
         comando_voz=os.environ.get("BOVEDA_TTS_CMD"),
         resolucion=os.environ.get("BOVEDA_RESOLUCION", "1080x1920"),
         fuente=os.environ.get("BOVEDA_FUENTE", "DejaVu Sans"),
+        karaoke=os.environ.get("BOVEDA_KARAOKE", "auto"),
+        idioma_voz=os.environ.get("BOVEDA_IDIOMA_VOZ", "es"),
+        dispositivo_alineacion=os.environ.get("BOVEDA_ALIGN_DEVICE", "auto"),
     )

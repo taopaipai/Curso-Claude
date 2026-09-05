@@ -26,6 +26,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from . import alineacion
 from .config import Config
 from .pipeline.analyze import _crear_mensaje, _texto_respuesta, cliente
 from .pipeline.download import HerramientaFaltante
@@ -192,6 +193,42 @@ def trocear_subtitulo(texto: str, limite: int = MAX_CARACTERES_SUBTITULO) -> lis
     return trozos or [texto]
 
 
+def agrupar_palabras(palabras: list[dict[str, Any]],
+                     limite: int = MAX_CARACTERES_SUBTITULO) -> list[list[dict[str, Any]]]:
+    """Agrupa palabras ya alineadas en lineas de subtitulo del mismo largo."""
+    lineas: list[list[dict[str, Any]]] = []
+    actual: list[dict[str, Any]] = []
+    largo = 0
+    for palabra in palabras:
+        texto = palabra["palabra"]
+        if actual and largo + 1 + len(texto) > limite:
+            lineas.append(actual)
+            actual, largo = [], 0
+        actual.append(palabra)
+        largo += (1 if largo else 0) + len(texto)
+    if actual:
+        lineas.append(actual)
+    return lineas
+
+
+def _linea_karaoke(linea: list[dict[str, Any]], desplazamiento: float,
+                   fin_linea: float) -> tuple[float, float, str]:
+    """Convierte una linea de palabras en texto ASS con etiquetas \k.
+
+    Cada palabra se ilumina hasta que empieza la siguiente, asi que el hueco
+    entre palabras se le suma a la anterior y el resaltado no parpadea.
+    """
+    inicio = desplazamiento + linea[0]["inicio"]
+    fin = desplazamiento + fin_linea
+    trozos = []
+    for indice, palabra in enumerate(linea):
+        siguiente = (linea[indice + 1]["inicio"] if indice + 1 < len(linea)
+                     else fin_linea)
+        centesimas = max(1, round((siguiente - palabra["inicio"]) * 100))
+        trozos.append(f"{{\\k{centesimas}}}{_escapar(palabra['palabra'])}")
+    return inicio, fin, " ".join(trozos)
+
+
 def construir_ass(escenas: list[dict[str, Any]], destino: Path, cfg: Config) -> None:
     """Escribe los subtitulos y los rotulos como un unico archivo ASS.
 
@@ -208,9 +245,10 @@ WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Voz,{cfg.fuente},60,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,320,1
-Style: Rotulo,{cfg.fuente},80,&H0000E5FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,8,80,80,260,1
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Voz,{cfg.fuente},60,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,320,1
+Style: Karaoke,{cfg.fuente},60,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,320,1
+Style: Rotulo,{cfg.fuente},80,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,8,80,80,260,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -229,8 +267,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
         voz = (escena.get("voz") or "").strip()
-        if voz:
-            # Cada linea dura en proporcion a lo que se tarda en decirla.
+        palabras = escena.get("palabras") or []
+        if palabras:
+            # Con tiempos reales por palabra: karaoke, cada palabra se enciende
+            # cuando se dice.
+            grupos = agrupar_palabras(palabras)
+            for indice, grupo in enumerate(grupos):
+                fin_grupo = (grupos[indice + 1][0]["inicio"]
+                             if indice + 1 < len(grupos) else grupo[-1]["fin"])
+                inicio, fin, texto = _linea_karaoke(grupo, reloj, fin_grupo)
+                lineas.append(
+                    f"Dialogue: 1,{_tiempo_ass(inicio)},{_tiempo_ass(fin)},"
+                    f"Karaoke,,0,0,0,,{texto}"
+                )
+        elif voz:
+            # Sin alineacion: cada linea dura en proporcion a lo que se tarda
+            # en decirla.
             trozos = trocear_subtitulo(voz)
             total = sum(len(t) for t in trozos) or 1
             inicio = reloj
@@ -258,13 +310,40 @@ def _ffmpeg() -> str:
     return binario
 
 
+def quiere_karaoke(cfg: Config) -> bool:
+    """El karaoke necesita whisperx; en 'auto' se usa solo si esta instalado."""
+    if cfg.karaoke == "no":
+        return False
+    if cfg.karaoke in ("si", "sí"):
+        if not alineacion.disponible():
+            raise ErrorMontaje(
+                'BOVEDA_KARAOKE=si pero whisperx no esta instalado: '
+                'pip install "boveda[karaoke]" o pon BOVEDA_KARAOKE=no'
+            )
+        return True
+    return alineacion.disponible()
+
+
 def _pista_de_voz(cfg: Config, escenas: list[dict[str, Any]], trabajo: Path,
-                  ffmpeg: str) -> tuple[Path, float]:
-    """Sintetiza cada escena, mete una pausa entre ellas y lo concatena todo."""
+                  ffmpeg: str, avisos: list[str] | None = None
+                  ) -> tuple[Path, float]:
+    """Sintetiza cada escena, la alinea, mete una pausa y lo concatena todo."""
+    avisos = avisos if avisos is not None else []
+    karaoke = quiere_karaoke(cfg)
     piezas: list[Path] = []
     for indice, escena in enumerate(escenas):
         pieza = trabajo / f"voz_{indice:03d}.wav"
         escena["duracion"] = sintetizar(cfg, escena.get("voz", ""), pieza, ffmpeg)
+        escena["palabras"] = []
+        if karaoke and (escena.get("voz") or "").strip():
+            try:
+                escena["palabras"] = alineacion.alinear(
+                    pieza, escena["voz"], escena["duracion"],
+                    idioma=cfg.idioma_voz, dispositivo=cfg.dispositivo_alineacion)
+            except alineacion.ErrorAlineacion as exc:
+                # Una escena sin alinear cae al reparto por longitud; el resto
+                # del video no se pierde por eso.
+                avisos.append(f"escena {indice + 1}: {exc}")
         piezas.append(pieza)
         if indice < len(escenas) - 1:
             pausa = trabajo / f"pausa_{indice:03d}.wav"
@@ -306,7 +385,10 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
         # El desglose se reutiliza: cambiar fondo o voz no deberia costar otra
         # llamada al modelo.
         if guardado and not rehacer:
-            escenas = json.loads(guardado["escenas_json"])
+            # Los tiempos y las palabras del montaje anterior no valen: la voz
+            # se vuelve a sintetizar ahora. Solo se reutiliza el desglose.
+            escenas = [{k: v for k, v in e.items() if k not in ("duracion", "palabras")}
+                       for e in json.loads(guardado["escenas_json"])]
         else:
             escenas = desglosar(cfg, con, produccion_id, cli)
 
@@ -315,7 +397,8 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
         shutil.rmtree(trabajo)
     trabajo.mkdir(parents=True, exist_ok=True)
 
-    voz, duracion = _pista_de_voz(cfg, escenas, trabajo, ffmpeg)
+    avisos: list[str] = []
+    voz, duracion = _pista_de_voz(cfg, escenas, trabajo, ffmpeg, avisos)
     subtitulos = trabajo / "subtitulos.ass"
     construir_ass(escenas, subtitulos, cfg)
 
@@ -357,7 +440,8 @@ def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
     )
     con.commit()
     return {"video": salida, "duracion": duracion, "escenas": escenas,
-            "subtitulos": subtitulos}
+            "subtitulos": subtitulos, "avisos": avisos,
+            "karaoke": any(e.get("palabras") for e in escenas)}
 
 
 def video_de(con: sqlite3.Connection, produccion_id: int) -> Path | None:

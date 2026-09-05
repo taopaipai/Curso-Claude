@@ -243,6 +243,8 @@ def cmd_montar(args) -> int:
     cfg, con = _abrir(args)
     if args.sin_voz:
         cfg = dataclasses.replace(cfg, motor_voz="ninguna")
+    if args.sin_karaoke:
+        cfg = dataclasses.replace(cfg, karaoke="no")
 
     for nombre, ruta in (("fondo", args.fondo), ("musica", args.musica)):
         if ruta and not Path(ruta).is_file():
@@ -259,8 +261,13 @@ def cmd_montar(args) -> int:
         print(exc, file=sys.stderr)
         return 1
 
+    subtitulos = ("karaoke, palabra por palabra" if resumen["karaoke"]
+                  else "por bloques (sin alineacion)")
     print(f"Video montado: {resumen['video']}")
-    print(f"  {len(resumen['escenas'])} escenas, {resumen['duracion']:.1f} s")
+    print(f"  {len(resumen['escenas'])} escenas, {resumen['duracion']:.1f} s, "
+          f"subtitulos {subtitulos}")
+    for aviso in resumen["avisos"]:
+        print(f"  ! {aviso}", file=sys.stderr)
     for i, escena in enumerate(resumen["escenas"], 1):
         rotulo = escena.get("rotulo") or ""
         print(f"  [{i:>2}] {escena.get('duracion', 0):>5.1f}s  {rotulo[:38]:<38} "
@@ -524,6 +531,8 @@ def construir_parser() -> argparse.ArgumentParser:
     mon.add_argument("--musica", help="pista de fondo, se mezcla baja")
     mon.add_argument("--sin-voz", dest="sin_voz", action="store_true",
                      help="solo rotulos y subtitulos, sin sintetizar voz")
+    mon.add_argument("--sin-karaoke", dest="sin_karaoke", action="store_true",
+                     help="subtitulos por bloques en vez de palabra por palabra")
     mon.add_argument("--rehacer", action="store_true",
                      help="vuelve a desglosar el guion en vez de reusar el desglose")
     mon.set_defaults(func=cmd_montar)
