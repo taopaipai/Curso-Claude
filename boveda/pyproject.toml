@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boveda"
+version = "0.1.0"
+description = "Archivo vivo de guardados de Instagram, TikTok y YouTube: transcripcion, analisis y reempaquetado"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0",
+    "yt-dlp>=2024.1.1",
+]
+
+[project.optional-dependencies]
+whisper = ["faster-whisper>=1.0"]
+karaoke = ["whisperx>=3.1"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+boveda = "boveda.cli:main"
+
+[tool.setuptools]
+packages = ["boveda", "boveda.ingest", "boveda.pipeline", "boveda.publish", "boveda.panel"]
+
+[tool.setuptools.package-data]
+boveda = ["prompts/*.md", "panel/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

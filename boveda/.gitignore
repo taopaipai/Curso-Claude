@@ -1,0 +1,11 @@
+# datos locales: nunca se versionan
+data/
+*.db
+*.db-wal
+*.db-shm
+media/
+audio/
+.env
+__pycache__/
+*.pyc
+.venv/

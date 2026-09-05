@@ -1,0 +1,521 @@
+"""Monta el video a partir del guion: voz sintetizada, subtitulos y fondo.
+
+El guion que escribe Claude es texto para humanos, con sus bloques y sus
+acotaciones. Aqui se convierte en una lista de escenas (lo que se dice, el
+rotulo que se ve) y con eso se arma un mp4 vertical.
+
+Piezas:
+  1. desglosar()  el guion -> escenas, con Claude y salida estructurada
+  2. sintetizar() cada escena -> un WAV de voz (piper local, un comando tuyo,
+                  o silencio con la duracion estimada si no quieres voz)
+  3. construir_ass() -> subtitulos quemados, repartidos por numero de caracteres
+  4. montar()     -> ffmpeg junta fondo + voz + musica + subtitulos
+
+Todo local: ffmpeg y el motor de voz corren en tu maquina. Anthropic no ofrece
+sintesis de voz, asi que esa parte es tuya (piper es gratis y suena bien en
+espanol).
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import sqlite3
+import subprocess
+import wave
+from pathlib import Path
+from typing import Any
+
+from . import alineacion, broll as broll_mod
+from .config import Config
+from .pipeline.analyze import _crear_mensaje, _texto_respuesta, cliente
+from .pipeline.download import HerramientaFaltante
+
+# Ritmo de lectura para estimar duraciones cuando no hay voz real.
+CARACTERES_POR_SEGUNDO = 14.0
+PAUSA_ENTRE_ESCENAS = 0.35
+MAX_CARACTERES_SUBTITULO = 38
+
+ESQUEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "escenas": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "voz": {"type": "string"},
+                    "rotulo": {"type": "string"},
+                    "nota_visual": {"type": "string"},
+                    "busqueda_broll": {"type": "string"},
+                },
+                "required": ["voz", "rotulo", "nota_visual", "busqueda_broll"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["escenas"],
+    "additionalProperties": False,
+}
+
+INSTRUCCIONES = """Convierte este guion en una lista de escenas para montar un
+video vertical corto.
+
+Para cada escena:
+- `voz`: EXACTAMENTE lo que se dice en voz alta, en texto limpio y locutable.
+  Sin acotaciones, sin numeros de bloque, sin corchetes, sin marcas de tiempo,
+  sin indicaciones de camara. Si una parte del guion no se dice (es una nota de
+  produccion), no la incluyas aqui.
+- `rotulo`: el texto corto que aparece en pantalla en esa escena, maximo 8
+  palabras. Si el guion no propone ninguno, escribe una idea fuerza sacada de lo
+  que se dice. Cadena vacia solo si de verdad no debe haber rotulo.
+- `nota_visual`: que se ve, en una linea. Es documentacion para quien grabe;
+  no aparece en el video.
+- `busqueda_broll`: 2 a 4 palabras EN INGLES para buscar el plano de fondo en un
+  banco de video de stock (los bancos indexan en ingles). Cosas filmables y
+  concretas: "person typing laptop", "hourglass desk", "city night traffic".
+  Nada abstracto ("success", "productivity") ni nombres propios.
+
+Corta por unidades de sentido: cada escena es una frase o dos, lo que se dice de
+un tiron. El gancho va siempre en la primera escena. No inventes contenido que
+no este en el guion."""
+
+
+class ErrorMontaje(RuntimeError):
+    pass
+
+
+# --- 1. guion -> escenas -----------------------------------------------------
+
+def desglosar(cfg: Config, con: sqlite3.Connection, produccion_id: int,
+              cli=None) -> list[dict[str, str]]:
+    fila = con.execute(
+        "SELECT formato, titulo, cuerpo FROM producciones WHERE id = ?", (produccion_id,)
+    ).fetchone()
+    if fila is None:
+        raise ErrorMontaje(f"no existe la produccion {produccion_id}")
+
+    contenido = (f"FORMATO: {fila['formato']}\nTITULO: {fila['titulo'] or ''}\n\n"
+                 f"GUION:\n{fila['cuerpo']}")
+    respuesta = _crear_mensaje(cli or cliente(), cfg, INSTRUCCIONES, contenido, ESQUEMA)
+    escenas = json.loads(_texto_respuesta(respuesta)).get("escenas") or []
+    if not escenas:
+        raise ErrorMontaje("el desglose no devolvio ninguna escena")
+    return escenas
+
+
+# --- 2. voz ------------------------------------------------------------------
+
+def duracion_wav(ruta: Path) -> float:
+    with wave.open(str(ruta), "rb") as w:
+        return w.getnframes() / float(w.getframerate() or 1)
+
+
+def duracion_estimada(texto: str) -> float:
+    return max(1.2, len(texto) / CARACTERES_POR_SEGUNDO)
+
+
+def _silencio(ffmpeg: str, destino: Path, segundos: float) -> None:
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+         "-t", f"{segundos:.3f}", "-c:a", "pcm_s16le", str(destino)],
+        check=True, capture_output=True,
+    )
+
+
+def sintetizar(cfg: Config, texto: str, destino: Path, ffmpeg: str = "ffmpeg") -> float:
+    """Genera el WAV de una escena y devuelve su duracion en segundos."""
+    crudo = destino.with_suffix(".crudo.wav")
+
+    if cfg.motor_voz == "ninguna" or not texto.strip():
+        _silencio(ffmpeg, destino, duracion_estimada(texto))
+        return duracion_wav(destino)
+
+    if cfg.motor_voz == "piper":
+        if shutil.which("piper") is None:
+            raise ErrorMontaje(
+                "piper no esta instalado (pip install piper-tts y descarga una voz .onnx), "
+                "o cambia BOVEDA_TTS_ENGINE a 'cmd' o 'ninguna'"
+            )
+        if not cfg.voz:
+            raise ErrorMontaje("falta BOVEDA_TTS_VOICE con la ruta al modelo .onnx de piper")
+        subprocess.run(
+            ["piper", "--model", cfg.voz, "--output_file", str(crudo)],
+            input=texto, text=True, check=True, capture_output=True,
+        )
+    elif cfg.motor_voz == "cmd":
+        if not cfg.comando_voz:
+            raise ErrorMontaje("BOVEDA_TTS_ENGINE=cmd pero BOVEDA_TTS_CMD esta vacio")
+        import shlex
+        comando = [p.replace("{texto}", texto).replace("{salida}", str(crudo))
+                   for p in shlex.split(cfg.comando_voz)]
+        subprocess.run(comando, check=True, capture_output=True)
+        if not crudo.is_file():
+            raise ErrorMontaje(f"el comando de voz no escribio el WAV en {crudo}")
+    else:
+        raise ErrorMontaje(f"motor de voz desconocido: {cfg.motor_voz}")
+
+    # Se normaliza a 48 kHz mono para poder concatenar sin recodificar despues.
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(crudo),
+         "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(destino)],
+        check=True, capture_output=True,
+    )
+    crudo.unlink(missing_ok=True)
+    return duracion_wav(destino)
+
+
+# --- 3. subtitulos -----------------------------------------------------------
+
+def _tiempo_ass(segundos: float) -> str:
+    segundos = max(0.0, segundos)
+    horas, resto = divmod(segundos, 3600)
+    minutos, seg = divmod(resto, 60)
+    return f"{int(horas)}:{int(minutos):02d}:{seg:05.2f}"
+
+
+def _escapar(texto: str) -> str:
+    return texto.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", "\\N")
+
+
+def trocear_subtitulo(texto: str, limite: int = MAX_CARACTERES_SUBTITULO) -> list[str]:
+    """Parte lo que se dice en trozos cortos, que es como se leen los subtitulos.
+
+    Cada trozo cabe en una o dos lineas: el ajuste fino lo hace el renderizador
+    de ASS (`WrapStyle: 0`), que sabe el ancho real de la fuente.
+    """
+    trozos: list[str] = []
+    actual = ""
+    for palabra in texto.split():
+        if actual and len(actual) + 1 + len(palabra) > limite:
+            trozos.append(actual)
+            actual = palabra
+        else:
+            actual = f"{actual} {palabra}".strip()
+    if actual:
+        trozos.append(actual)
+    return trozos or [texto]
+
+
+def agrupar_palabras(palabras: list[dict[str, Any]],
+                     limite: int = MAX_CARACTERES_SUBTITULO) -> list[list[dict[str, Any]]]:
+    """Agrupa palabras ya alineadas en lineas de subtitulo del mismo largo."""
+    lineas: list[list[dict[str, Any]]] = []
+    actual: list[dict[str, Any]] = []
+    largo = 0
+    for palabra in palabras:
+        texto = palabra["palabra"]
+        if actual and largo + 1 + len(texto) > limite:
+            lineas.append(actual)
+            actual, largo = [], 0
+        actual.append(palabra)
+        largo += (1 if largo else 0) + len(texto)
+    if actual:
+        lineas.append(actual)
+    return lineas
+
+
+def _linea_karaoke(linea: list[dict[str, Any]], desplazamiento: float,
+                   fin_linea: float) -> tuple[float, float, str]:
+    """Convierte una linea de palabras en texto ASS con etiquetas \k.
+
+    Cada palabra se ilumina hasta que empieza la siguiente, asi que el hueco
+    entre palabras se le suma a la anterior y el resaltado no parpadea.
+    """
+    inicio = desplazamiento + linea[0]["inicio"]
+    fin = desplazamiento + fin_linea
+    trozos = []
+    for indice, palabra in enumerate(linea):
+        siguiente = (linea[indice + 1]["inicio"] if indice + 1 < len(linea)
+                     else fin_linea)
+        centesimas = max(1, round((siguiente - palabra["inicio"]) * 100))
+        trozos.append(f"{{\\k{centesimas}}}{_escapar(palabra['palabra'])}")
+    return inicio, fin, " ".join(trozos)
+
+
+def construir_ass(escenas: list[dict[str, Any]], destino: Path, cfg: Config) -> None:
+    """Escribe los subtitulos y los rotulos como un unico archivo ASS.
+
+    Se usa ASS y no SRT porque hacen falta dos estilos a la vez: el rotulo grande
+    arriba y el subtitulo abajo. Y se evita `drawtext`, cuyo escapado es una
+    fuente inagotable de errores.
+    """
+    ancho, _, alto = cfg.resolucion.partition("x")
+    cabecera = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {ancho}
+PlayResY: {alto}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Voz,{cfg.fuente},60,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,320,1
+Style: Karaoke,{cfg.fuente},60,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,320,1
+Style: Rotulo,{cfg.fuente},80,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,8,80,80,260,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    lineas: list[str] = []
+    reloj = 0.0
+    for escena in escenas:
+        duracion = float(escena.get("duracion") or duracion_estimada(escena.get("voz", "")))
+        fin_escena = reloj + duracion
+
+        rotulo = _escapar((escena.get("rotulo") or "").strip())
+        if rotulo:
+            lineas.append(
+                f"Dialogue: 0,{_tiempo_ass(reloj)},{_tiempo_ass(fin_escena)},"
+                f"Rotulo,,0,0,0,,{rotulo}"
+            )
+
+        voz = (escena.get("voz") or "").strip()
+        palabras = escena.get("palabras") or []
+        if palabras:
+            # Con tiempos reales por palabra: karaoke, cada palabra se enciende
+            # cuando se dice.
+            grupos = agrupar_palabras(palabras)
+            for indice, grupo in enumerate(grupos):
+                fin_grupo = (grupos[indice + 1][0]["inicio"]
+                             if indice + 1 < len(grupos) else grupo[-1]["fin"])
+                inicio, fin, texto = _linea_karaoke(grupo, reloj, fin_grupo)
+                lineas.append(
+                    f"Dialogue: 1,{_tiempo_ass(inicio)},{_tiempo_ass(fin)},"
+                    f"Karaoke,,0,0,0,,{texto}"
+                )
+        elif voz:
+            # Sin alineacion: cada linea dura en proporcion a lo que se tarda
+            # en decirla.
+            trozos = trocear_subtitulo(voz)
+            total = sum(len(t) for t in trozos) or 1
+            inicio = reloj
+            for trozo in trozos:
+                parte = duracion * (len(trozo) / total)
+                lineas.append(
+                    f"Dialogue: 1,{_tiempo_ass(inicio)},{_tiempo_ass(inicio + parte)},"
+                    f"Voz,,0,0,0,,{_escapar(trozo)}"
+                )
+                inicio += parte
+
+        reloj = fin_escena + PAUSA_ENTRE_ESCENAS
+
+    destino.write_text(cabecera + "\n".join(lineas) + "\n", encoding="utf-8")
+
+
+# --- 4. montaje --------------------------------------------------------------
+
+def _ffmpeg() -> str:
+    binario = shutil.which("ffmpeg")
+    if binario is None:
+        raise HerramientaFaltante(
+            "Falta ffmpeg (brew install ffmpeg / sudo apt install ffmpeg)."
+        )
+    return binario
+
+
+def quiere_karaoke(cfg: Config) -> bool:
+    """El karaoke necesita whisperx; en 'auto' se usa solo si esta instalado."""
+    if cfg.karaoke == "no":
+        return False
+    if cfg.karaoke in ("si", "sí"):
+        if not alineacion.disponible():
+            raise ErrorMontaje(
+                'BOVEDA_KARAOKE=si pero whisperx no esta instalado: '
+                'pip install "boveda[karaoke]" o pon BOVEDA_KARAOKE=no'
+            )
+        return True
+    return alineacion.disponible()
+
+
+def _pista_de_voz(cfg: Config, escenas: list[dict[str, Any]], trabajo: Path,
+                  ffmpeg: str, avisos: list[str] | None = None
+                  ) -> tuple[Path, float]:
+    """Sintetiza cada escena, la alinea, mete una pausa y lo concatena todo."""
+    avisos = avisos if avisos is not None else []
+    karaoke = quiere_karaoke(cfg)
+    piezas: list[Path] = []
+    for indice, escena in enumerate(escenas):
+        pieza = trabajo / f"voz_{indice:03d}.wav"
+        escena["duracion"] = sintetizar(cfg, escena.get("voz", ""), pieza, ffmpeg)
+        escena["palabras"] = []
+        if karaoke and (escena.get("voz") or "").strip():
+            try:
+                escena["palabras"] = alineacion.alinear(
+                    pieza, escena["voz"], escena["duracion"],
+                    idioma=cfg.idioma_voz, dispositivo=cfg.dispositivo_alineacion)
+            except alineacion.ErrorAlineacion as exc:
+                # Una escena sin alinear cae al reparto por longitud; el resto
+                # del video no se pierde por eso.
+                avisos.append(f"escena {indice + 1}: {exc}")
+        piezas.append(pieza)
+        if indice < len(escenas) - 1:
+            pausa = trabajo / f"pausa_{indice:03d}.wav"
+            _silencio(ffmpeg, pausa, PAUSA_ENTRE_ESCENAS)
+            piezas.append(pausa)
+
+    lista = trabajo / "audio.txt"
+    lista.write_text("".join(f"file '{p.name}'\n" for p in piezas), encoding="utf-8")
+    voz = trabajo / "voz.wav"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "concat", "-safe", "0", "-i", str(lista), "-c", "copy", str(voz)],
+        check=True, capture_output=True, cwd=trabajo,
+    )
+    return voz, duracion_wav(voz)
+
+
+def construir_broll(cfg: Config, escenas: list[dict[str, Any]], trabajo: Path,
+                    ffmpeg: str, avisos: list[str] | None = None
+                    ) -> tuple[Path, list[Any]]:
+    """Un clip por escena, recortado a vertical y encadenado en un solo video.
+
+    Cada segmento dura lo que dura su escena mas la pausa que la sigue, para que
+    el corte de imagen caiga justo donde cambia lo que se dice.
+    """
+    avisos = avisos if avisos is not None else []
+    ancho, _, alto = cfg.resolucion.partition("x")
+    segmentos: list[Path] = []
+    clips: list[Any] = []
+
+    for indice, escena in enumerate(escenas):
+        duracion = float(escena.get("duracion") or duracion_estimada(escena.get("voz", "")))
+        if indice < len(escenas) - 1:
+            duracion += PAUSA_ENTRE_ESCENAS
+        consulta = (escena.get("busqueda_broll") or "").strip() or broll_mod.terminos(
+            escena.get("nota_visual", ""), escena.get("rotulo", ""))
+
+        clip = broll_mod.buscar(cfg, consulta, duracion, avisos)
+        clips.append(clip)
+        escena["broll"] = {"origen": clip.origen, "consulta": consulta,
+                           "autor": clip.autor, "url": clip.url}
+
+        segmento = trabajo / f"bg_{indice:03d}.mp4"
+        subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+             "-stream_loop", "-1", "-t", f"{duracion:.3f}", "-i", str(clip.ruta),
+             "-an", "-vf",
+             # El oscurecido no es cosmetico: sobre un b-roll claro los
+             # subtitulos blancos se pierden aunque lleven contorno.
+             f"scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
+             f"crop={ancho}:{alto},setsar=1,fps=30,"
+             f"eq=brightness=-{cfg.broll_oscurecer:.3f}:saturation=0.95",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+             "-pix_fmt", "yuv420p", "-t", f"{duracion:.3f}", str(segmento)],
+            check=True, capture_output=True,
+        )
+        segmentos.append(segmento)
+
+    lista = trabajo / "fondo.txt"
+    lista.write_text("".join(f"file '{s.name}'\n" for s in segmentos), encoding="utf-8")
+    fondo = trabajo / "fondo.mp4"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "concat", "-safe", "0", "-i", str(lista), "-c", "copy", str(fondo)],
+        check=True, capture_output=True, cwd=trabajo,
+    )
+    return fondo, clips
+
+
+def _entrada_de_fondo(cfg: Config, fondo: Path | None, duracion: float) -> list[str]:
+    if fondo is None:
+        color = "0x0F172A"
+        return ["-f", "lavfi", "-i",
+                f"color=c={color}:s={cfg.resolucion}:r=30:d={duracion:.2f}"]
+    if fondo.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+        return ["-loop", "1", "-t", f"{duracion:.2f}", "-i", str(fondo)]
+    return ["-stream_loop", "-1", "-t", f"{duracion:.2f}", "-i", str(fondo)]
+
+
+def montar(cfg: Config, con: sqlite3.Connection, produccion_id: int, *,
+           fondo: Path | None = None, musica: Path | None = None,
+           escenas: list[dict[str, Any]] | None = None, cli=None,
+           rehacer: bool = False, con_broll: bool | None = None) -> dict[str, Any]:
+    """Arma el video de una produccion y lo registra. Devuelve el resumen."""
+    ffmpeg = _ffmpeg()
+
+    guardado = con.execute(
+        "SELECT escenas_json FROM montajes WHERE produccion_id = ?", (produccion_id,)
+    ).fetchone()
+    if escenas is None:
+        # El desglose se reutiliza: cambiar fondo o voz no deberia costar otra
+        # llamada al modelo.
+        if guardado and not rehacer:
+            # Los tiempos y las palabras del montaje anterior no valen: la voz
+            # se vuelve a sintetizar ahora. Solo se reutiliza el desglose.
+            escenas = [{k: v for k, v in e.items()
+                        if k not in ("duracion", "palabras", "broll")}
+                       for e in json.loads(guardado["escenas_json"])]
+        else:
+            escenas = desglosar(cfg, con, produccion_id, cli)
+
+    trabajo = cfg.montajes / f"{produccion_id:05d}"
+    if trabajo.exists():
+        shutil.rmtree(trabajo)
+    trabajo.mkdir(parents=True, exist_ok=True)
+
+    avisos: list[str] = []
+    voz, duracion = _pista_de_voz(cfg, escenas, trabajo, ffmpeg, avisos)
+    subtitulos = trabajo / "subtitulos.ass"
+    construir_ass(escenas, subtitulos, cfg)
+
+    # El b-roll se busca despues de la voz porque necesita la duracion real de
+    # cada escena para recortar cada clip a su medida.
+    clips: list[Any] = []
+    quiere_broll = cfg.broll != "no" if con_broll is None else con_broll
+    if fondo is None and quiere_broll:
+        fondo, clips = construir_broll(cfg, escenas, trabajo, ffmpeg, avisos)
+        texto_creditos = broll_mod.creditos(clips)
+        if texto_creditos:
+            (trabajo / "creditos.txt").write_text(texto_creditos, encoding="utf-8")
+
+    ancho, _, alto = cfg.resolucion.partition("x")
+    cadena = (f"[0:v]scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
+              f"crop={ancho}:{alto},setsar=1,ass={subtitulos.name}[v]")
+    entradas = _entrada_de_fondo(cfg, fondo, duracion) + ["-i", str(voz)]
+    mapas = ["-map", "[v]", "-map", "1:a"]
+
+    if musica:
+        entradas += ["-stream_loop", "-1", "-t", f"{duracion:.2f}", "-i", str(musica)]
+        cadena += ";[2:a]volume=0.12[m];[1:a][m]amix=inputs=2:duration=first[a]"
+        mapas = ["-map", "[v]", "-map", "[a]"]
+
+    salida = trabajo / "video.mp4"
+    orden = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *entradas,
+             "-filter_complex", cadena, *mapas,
+             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-r", "30",
+             "-c:a", "aac", "-b:a", "192k", "-shortest", str(salida)]
+    proceso = subprocess.run(orden, capture_output=True, text=True, cwd=trabajo)
+    if proceso.returncode != 0 or not salida.is_file():
+        detalle = (proceso.stderr or "").strip().splitlines()
+        raise ErrorMontaje(f"ffmpeg fallo: {detalle[-1] if detalle else 'sin detalle'}")
+
+    con.execute(
+        """
+        INSERT INTO montajes (produccion_id, ruta_video, ruta_audio, ruta_subtitulos,
+                              duracion_seg, voz, escenas_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(produccion_id) DO UPDATE SET
+            ruta_video = excluded.ruta_video, ruta_audio = excluded.ruta_audio,
+            ruta_subtitulos = excluded.ruta_subtitulos,
+            duracion_seg = excluded.duracion_seg, voz = excluded.voz,
+            escenas_json = excluded.escenas_json, creado_en = datetime('now')
+        """,
+        (produccion_id, str(salida), str(voz), str(subtitulos), duracion,
+         cfg.voz or cfg.motor_voz, json.dumps(escenas, ensure_ascii=False)),
+    )
+    con.commit()
+    return {"video": salida, "duracion": duracion, "escenas": escenas,
+            "subtitulos": subtitulos, "avisos": avisos, "clips": clips,
+            "karaoke": any(e.get("palabras") for e in escenas)}
+
+
+def video_de(con: sqlite3.Connection, produccion_id: int) -> Path | None:
+    fila = con.execute(
+        "SELECT ruta_video FROM montajes WHERE produccion_id = ?", (produccion_id,)
+    ).fetchone()
+    if fila and Path(fila["ruta_video"]).is_file():
+        return Path(fila["ruta_video"])
+    return None

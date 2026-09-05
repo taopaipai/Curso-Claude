@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bóveda</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><text y=%2213%22 font-size=%2213%22>🗄️</text></svg>">
+<style>
+  :root {
+    --fondo: #0d1117; --panel: #161b22; --panel2: #1c232c; --borde: #2a3038;
+    --texto: #e6edf3; --suave: #8b949e; --acento: #ffd23f; --ok: #3fb950;
+    --alerta: #f85149; --info: #58a6ff;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* si no, display:flex gana al atributo */
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--borde); background: var(--panel);
+    position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .5px; }
+  h1 span { color: var(--acento); }
+  .cifras { display: flex; gap: 14px; color: var(--suave); font-size: 12px; }
+  .cifras b { color: var(--texto); font-variant-numeric: tabular-nums; }
+  header .crece { flex: 1; }
+  select, input[type=search] { background: var(--panel2); color: var(--texto);
+    border: 1px solid var(--borde); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  #estado { font-size: 12px; color: var(--suave); min-width: 90px; text-align: right; }
+
+  .pestanas { display: flex; gap: 4px; }
+  .pestanas button { padding: 4px 12px; font-size: 12px; }
+  .pestanas button.activa { border-color: var(--acento); color: var(--acento); }
+  .soloNichos { display: none; }
+  body.nichos .soloNichos { display: inline-block; }
+  body.nichos .filtroContenido { display: none; }
+
+  .fichaNicho { padding: 16px 18px; }
+  .cabeceraNicho { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 4px; }
+  .cabeceraNicho h2 { margin: 0; font-size: 20px; }
+  .perfil { font-family: ui-monospace, monospace; font-size: 12px; color: var(--acento);
+    background: var(--panel); border: 1px solid var(--borde); border-radius: 5px; padding: 2px 7px; }
+  .progreso { height: 6px; background: var(--panel); border-radius: 4px; overflow: hidden;
+    margin: 10px 0 18px; max-width: 520px; }
+  .progreso div { height: 100%; background: var(--acento); }
+
+  .cuentas { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .cuentaRed { background: var(--panel); border: 1px solid var(--borde); border-radius: 9px;
+    padding: 10px 12px; min-width: 250px; }
+  .cuentaRed h4 { margin: 0 0 2px; font-size: 13px; display: flex; justify-content: space-between;
+    gap: 10px; align-items: center; }
+  .escalera { display: flex; gap: 3px; margin: 8px 0 6px; }
+  .paso { flex: 1; height: 4px; border-radius: 3px; background: var(--borde); }
+  .paso.hecho { background: var(--ok); }
+  .paso.error { background: var(--alerta); }
+  .cuentaRed select { width: 100%; margin-top: 6px; font-size: 11px; }
+  .cuentaRed .estrategia { font-size: 11px; color: var(--suave); margin: 4px 0 0; }
+  .tarea { display: flex; gap: 8px; align-items: flex-start; }
+  .tarea input { margin-top: 3px; accent-color: var(--ok); }
+  .tarea.hecha p { text-decoration: line-through; color: var(--suave); }
+  .nuevo { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0 18px; }
+
+  .tablero { display: flex; gap: 12px; padding: 14px; overflow-x: auto;
+    align-items: flex-start; min-height: calc(100vh - 62px); }
+  .columna { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px;
+    width: 290px; flex: 0 0 290px; display: flex; flex-direction: column;
+    max-height: calc(100vh - 90px); min-height: 260px; }
+  .columna > header { position: static; background: none; border: 0;
+    border-bottom: 1px solid var(--borde); padding: 10px 12px; display: block; }
+  .columna h2 { font-size: 13px; margin: 0 0 2px; display: flex; justify-content: space-between; }
+  .cuenta { background: var(--panel2); border-radius: 20px; padding: 0 8px;
+    font-size: 11px; color: var(--suave); font-variant-numeric: tabular-nums; }
+  .ayuda { font-size: 11px; color: var(--suave); margin: 0; }
+  .columna.errores { border-color: #5c2626; }
+  .columna.errores h2 { color: var(--alerta); }
+  .pila { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+    flex: 1; }
+
+  .tarjeta { background: var(--panel2); border: 1px solid var(--borde); border-radius: 8px;
+    padding: 8px; cursor: pointer; display: grid; grid-template-columns: 46px 1fr; gap: 8px; }
+  .tarjeta:hover { border-color: var(--info); }
+  .miniatura { width: 46px; height: 62px; border-radius: 5px; object-fit: cover;
+    background: #22272e; display: grid; place-items: center; color: var(--suave); font-size: 10px; }
+  .titulo { font-size: 12.5px; font-weight: 600; margin: 0 0 2px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .meta { font-size: 11px; color: var(--suave); display: flex; flex-wrap: wrap; gap: 6px; }
+  .etq { font-size: 10px; padding: 1px 6px; border-radius: 20px; border: 1px solid var(--borde); }
+  .etq.instagram { color: #e1306c; border-color: #7a2244; }
+  .etq.tiktok { color: #25f4ee; border-color: #175f5c; }
+  .etq.youtube { color: #ff4d4d; border-color: #6e2020; }
+  .etq.caducado { color: #d29922; border-color: #6b4c11; }
+  .etq.atemporal { color: var(--ok); border-color: #1d5c2c; }
+  .etq.vigente { color: var(--info); border-color: #1f4a7a; }
+  .etq.montado { color: var(--acento); border-color: #6b5a11; }
+  .acciones { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 2px; }
+  button { background: var(--panel); color: var(--texto); border: 1px solid var(--borde);
+    border-radius: 6px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  button:hover { border-color: var(--info); }
+  button.si { border-color: #1d5c2c; color: var(--ok); }
+  .vacio { color: var(--suave); font-size: 12px; padding: 6px 2px; }
+
+  /* ficha lateral */
+  #velo { position: fixed; inset: 0; background: #000a; display: none; z-index: 10; }
+  #velo.abierto { display: block; }
+  #ficha { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 100%);
+    background: var(--panel); border-left: 1px solid var(--borde); overflow-y: auto;
+    padding: 18px 22px; z-index: 11; transform: translateX(100%); transition: transform .18s; }
+  #velo.abierto #ficha { transform: none; }
+  #ficha h2 { margin: 0 0 4px; font-size: 17px; }
+  #ficha h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--suave); margin: 20px 0 6px; border-bottom: 1px solid var(--borde); padding-bottom: 4px; }
+  #ficha p { margin: 6px 0; }
+  .cerrar { position: absolute; top: 14px; right: 18px; }
+  .kpis { display: flex; gap: 18px; margin: 10px 0; }
+  .kpi b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: 11px; color: var(--suave); }
+  .comentario { border-left: 2px solid var(--borde); padding: 2px 0 2px 10px; margin: 8px 0; }
+  .comentario .quien { font-size: 11px; color: var(--suave); }
+  .lista { margin: 4px 0 4px 18px; padding: 0; }
+  pre { background: var(--fondo); border: 1px solid var(--borde); border-radius: 6px;
+    padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
+  code.cmd { background: var(--fondo); border: 1px solid var(--borde); border-radius: 5px;
+    padding: 2px 6px; font-size: 12px; display: inline-block; }
+  a { color: var(--info); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BÓ<span>VEDA</span></h1>
+  <nav class="pestanas">
+    <button id="tabContenido" class="activa" onclick="verVista('contenido')">Contenido</button>
+    <button id="tabNichos" onclick="verVista('nichos')">Nichos</button>
+  </nav>
+  <div class="cifras" id="cifras"></div>
+  <span class="crece"></span>
+  <select id="fNicho" class="soloNichos"></select>
+  <select id="fPlataforma" class="filtroContenido"><option value="">todas las plataformas</option></select>
+  <select id="fCarpeta" class="filtroContenido"><option value="">todas las colecciones</option></select>
+  <input type="search" id="fTexto" class="filtroContenido" placeholder="buscar título o autor…">
+  <span id="estado"></span>
+</header>
+
+<div class="tablero" id="tablero"></div>
+<div id="vistaNichos" hidden></div>
+
+<div id="velo"><aside id="ficha"><button class="cerrar" onclick="cerrar()">cerrar</button>
+  <div id="fichaCuerpo"></div></aside></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let refrescoAutomatico = true;
+
+const numero = (n) => n == null ? "–" : Intl.NumberFormat("es").format(n);
+const esc = (t) => (t ?? "").toString().replace(/[<>&"]/g,
+  (c) => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;"}[c]));
+
+function filtros() {
+  const p = new URLSearchParams();
+  if ($("#fPlataforma").value) p.set("plataforma", $("#fPlataforma").value);
+  if ($("#fCarpeta").value) p.set("carpeta", $("#fCarpeta").value);
+  if ($("#fTexto").value.trim()) p.set("q", $("#fTexto").value.trim());
+  return p.toString();
+}
+
+async function cargar() {
+  $("#estado").textContent = "actualizando…";
+  if (vista === "nichos") {
+    await cargarNichos();
+    $("#estado").textContent = "al día · " + new Date().toLocaleTimeString("es");
+    return;
+  }
+  try {
+    const datos = await (await fetch("/api/tablero?" + filtros())).json();
+    pintarCifras(datos.resumen);
+    pintarOpciones(datos.filtros);
+    pintarTablero(datos.columnas);
+    $("#estado").textContent = "al día · " + new Date().toLocaleTimeString("es");
+  } catch (e) {
+    $("#estado").textContent = "sin conexión con el panel";
+  }
+}
+
+function pintarCifras(r) {
+  $("#cifras").innerHTML = `
+    <span><b>${numero(r.items)}</b> guardados</span>
+    <span><b>${numero(r.analizados)}</b> analizados</span>
+    <span><b>${numero(r.comentarios)}</b> comentarios</span>
+    <span><b>${numero(r.publicados)}</b> publicados</span>`;
+}
+
+function pintarOpciones({plataformas, carpetas}) {
+  for (const [sel, valores, etiqueta] of [
+      ["#fPlataforma", plataformas, "todas las plataformas"],
+      ["#fCarpeta", carpetas, "todas las colecciones"]]) {
+    const nodo = $(sel), actual = nodo.value;
+    if (nodo.dataset.lleno === valores.join("|")) continue;
+    nodo.dataset.lleno = valores.join("|");
+    nodo.innerHTML = `<option value="">${etiqueta}</option>` +
+      valores.map((v) => `<option${v === actual ? " selected" : ""}>${esc(v)}</option>`).join("");
+  }
+}
+
+function pintarTablero(columnas) {
+  $("#tablero").innerHTML = columnas.map((c) => `
+    <section class="columna ${c.id === "errores" ? "errores" : ""}">
+      <header>
+        <h2>${esc(c.titulo)} <span class="cuenta">${c.total}</span></h2>
+        <p class="ayuda">${esc(c.ayuda)}</p>
+      </header>
+      <div class="pila">
+        ${c.tarjetas.length ? c.tarjetas.map((t) => tarjeta(t, c.id)).join("")
+                            : '<p class="vacio">nada por aquí</p>'}
+      </div>
+    </section>`).join("");
+}
+
+function tarjeta(t, columna) {
+  const item = t.item_id ?? t.id;
+  const insignias = [
+    t.plataforma ? `<span class="etq ${t.plataforma}">${t.plataforma}</span>` : "",
+    t.vigencia ? `<span class="etq ${t.vigencia}">${t.vigencia}${t.valor ? " " + t.valor + "/5" : ""}</span>` : "",
+    t.montado ? '<span class="etq montado">video listo</span>' : "",
+    t.carpeta ? `<span class="etq">${esc(t.carpeta)}</span>` : "",
+  ].join("");
+
+  const numeros = t.metricas ? [
+    t.metricas.vistas != null ? numero(t.metricas.vistas) + " vistas" : "",
+    t.metricas.likes != null ? numero(t.metricas.likes) + " likes" : "",
+    t.metricas.guardados != null ? numero(t.metricas.guardados) + " guardados" : "",
+    t.n_comentarios ? t.n_comentarios + " coment." : "",
+  ].filter(Boolean).join(" · ") : esc(t.subtitulo);
+
+  let acciones = "";
+  if (columna === "errores")
+    acciones = `<button onclick="accion(event,'reintentar',${t.id})">reintentar</button>`;
+  else if (columna === "borrador")
+    acciones = `<button class="si" onclick="accion(event,'aprobar',${t.id})">aprobar</button>`;
+  else if (columna === "aprobado")
+    acciones = `<button onclick="accion(event,'devolver',${t.id})">a borrador</button>`;
+  else if (columna === "programada")
+    acciones = `<button onclick="accion(event,'cancelar',${t.id})">quitar de la cola</button>`;
+
+  return `<article class="tarjeta" onclick="abrir(${item})">
+    ${t.miniatura ? `<img class="miniatura" src="${t.miniatura}" loading="lazy"
+        onerror="this.replaceWith(Object.assign(document.createElement('div'),
+        {className:'miniatura',textContent:'—'}))">`
+      : '<div class="miniatura">—</div>'}
+    <div>
+      <p class="titulo">${esc(t.titulo)}</p>
+      <div class="meta">${insignias}</div>
+      <div class="meta">${esc(numeros)}</div>
+      ${t.error ? `<div class="meta" style="color:var(--alerta)">${esc(t.error.slice(0, 90))}</div>` : ""}
+    </div>
+    ${acciones ? `<div class="acciones">${acciones}</div>` : ""}
+  </article>`;
+}
+
+async function accion(ev, accion, id) {
+  ev.stopPropagation();
+  const r = await (await fetch("/api/accion", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({accion, id})})).json();
+  await cargar();
+  $("#estado").textContent = r.error ? "error: " + r.error : r.mensaje;
+}
+
+async function abrir(itemId) {
+  refrescoAutomatico = false;
+  $("#velo").classList.add("abierto");
+  $("#fichaCuerpo").innerHTML = "<p>cargando…</p>";
+  const d = await (await fetch("/api/item/" + itemId)).json();
+  $("#fichaCuerpo").innerHTML = ficha(d);
+}
+
+function cerrar() {
+  $("#velo").classList.remove("abierto");
+  refrescoAutomatico = true;
+}
+$("#velo").onclick = (e) => { if (e.target.id === "velo") cerrar(); };
+
+function tiempo(seg, exacto) {
+  if (seg == null) return "?";
+  const u = [[31536000, "años"], [2592000, "meses"], [86400, "d"], [3600, "h"], [60, "min"]];
+  for (const [s, n] of u) if (seg >= s) return `${Math.floor(seg / s)} ${n}${exacto ? "" : " aprox"}`;
+  return seg + " s";
+}
+
+function ficha(d) {
+  const i = d.item, a = d.analisis;
+  const lista = (xs) => (xs && xs.length)
+    ? `<ul class="lista">${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+    : '<p class="ayuda">—</p>';
+
+  return `
+    <h2>${esc(i.titulo || i.url_canonica)}</h2>
+    <p class="meta">${esc(i.autor || "autor desconocido")} ·
+      <span class="etq ${i.plataforma}">${i.plataforma}</span> ·
+      publicado ${esc(i.publicado_en || "?")} · guardado ${esc(i.guardado_en || "?")}</p>
+    <p><a href="${esc(i.url_canonica)}" target="_blank" rel="noreferrer">ver original ↗</a></p>
+
+    <div class="kpis">
+      <div class="kpi"><b>${numero(i.vistas)}</b><span>vistas</span></div>
+      <div class="kpi"><b>${numero(i.likes)}</b><span>likes</span></div>
+      <div class="kpi"><b>${numero(i.comentarios_n)}</b><span>comentarios</span></div>
+      <div class="kpi"><b>${numero(i.guardados)}</b><span>guardados</span></div>
+    </div>
+    ${d.historial.length > 1 ? `<p class="ayuda">${d.historial.length} instantáneas:
+      de ${numero(d.historial[0].vistas)} vistas el ${esc(d.historial[0].capturado_en.slice(0,10))}
+      a ${numero(d.historial.at(-1).vistas)} hoy.</p>` : ""}
+
+    ${a ? `
+      <h3>Gancho</h3>
+      <p><em>«${esc(a.hook?.texto)}»</em></p>
+      <p class="ayuda">${esc(a.hook?.tecnica)} · segundo ${esc(a.hook?.segundos)}</p>
+      <p>${esc(a.hook?.por_que_funciona)}</p>
+
+      <h3>Estructura</h3>
+      ${lista((a.estructura || []).map((b) =>
+        `${b.inicio_seg}–${b.fin_seg}s · ${b.seccion}: ${b.proposito}`))}
+
+      <h3>Vigencia</h3>
+      <p><span class="etq ${esc(a.vigencia?.estado)}">${esc(a.vigencia?.estado)}</span>
+         valor histórico ${esc(a.vigencia?.valor_historico)}/5</p>
+      <p>${esc(a.vigencia?.razon)}</p>
+
+      <h3>Aplicable para nosotros</h3>
+      ${lista(a.aplicabilidad?.para_nosotros)}
+      <h3>Para enseñar</h3>
+      ${lista(a.aplicabilidad?.para_ensenar)}
+    ` : '<h3>Análisis</h3><p class="ayuda">Todavía sin analizar.</p>'}
+
+    <h3>Comentarios más votados</h3>
+    ${d.comentarios.length ? d.comentarios.map((c) => `
+      <div class="comentario">
+        <div class="quien">${numero(c.likes)} likes · ${tiempo(c.segundos_tras, c.tiempo_exacto)}
+          después${c.autor ? " · " + esc(c.autor) : ""}${c.es_del_autor ? " · autor del vídeo" : ""}</div>
+        ${esc(c.texto)}
+      </div>`).join("") : '<p class="ayuda">Sin comentarios capturados.</p>'}
+
+    <h3>Producciones</h3>
+    ${d.producciones.length ? d.producciones.map((p) => `
+      <p><b>${esc(p.formato)}</b> · ${esc(p.nicho || "sin nicho")} ·
+         <span class="etq">${esc(p.estado)}</span></p>
+      <pre>${esc((p.cuerpo || "").slice(0, 700))}</pre>
+      <p class="ayuda">Para publicarla:
+        <code class="cmd">boveda publicar ${p.id} --red tiktok --confirmar</code></p>
+    `).join("") : `<p class="ayuda">Ninguna todavía. Genera una con
+        <code class="cmd">boveda producir ${i.id} --formato reel</code></p>`}
+
+    ${d.publicaciones.length ? `<h3>Publicaciones</h3>` + d.publicaciones.map((p) => `
+      <p><span class="etq">${esc(p.estado)}</span> ${esc(p.red)}
+        ${p.url_remota ? `· <a href="${esc(p.url_remota)}" target="_blank" rel="noreferrer">ver ↗</a>` : ""}
+        ${p.error ? `<br><span style="color:var(--alerta)">${esc(p.error)}</span>` : ""}</p>`).join("") : ""}
+
+    ${i.transcripcion ? `<h3>Transcripción</h3><pre>${esc(i.transcripcion)}</pre>` : ""}
+    ${i.pantalla ? `<h3>Texto en pantalla</h3><pre>${esc(i.pantalla)}</pre>` : ""}`;
+}
+
+// ---- vista de nichos -------------------------------------------------------
+let vista = "contenido";
+let nichoActual = null;
+
+function verVista(cual) {
+  vista = cual;
+  document.body.classList.toggle("nichos", cual === "nichos");
+  $("#tabContenido").classList.toggle("activa", cual === "contenido");
+  $("#tabNichos").classList.toggle("activa", cual === "nichos");
+  $("#tablero").hidden = cual !== "contenido";
+  $("#vistaNichos").hidden = cual !== "nichos";
+  cargar();
+}
+
+async function cargarNichos() {
+  const datos = await (await fetch("/api/nichos")).json();
+  const sel = $("#fNicho");
+  if (!datos.nichos.length) {
+    sel.innerHTML = "<option>sin nichos</option>";
+    $("#vistaNichos").innerHTML = `<div class="fichaNicho">
+      <h2>Todavía no hay ninguna marca</h2>
+      <p class="ayuda">Un nicho es una marca con su propio público, sus cuentas y su
+        montaje. Cada uno lleva su tablero por separado.</p>
+      ${formularioNuevoNicho()}</div>`;
+    return;
+  }
+  if (!nichoActual || !datos.nichos.some((n) => n.clave === nichoActual))
+    nichoActual = datos.nichos[0].clave;
+  sel.innerHTML = datos.nichos.map((n) =>
+    `<option value="${esc(n.clave)}"${n.clave === nichoActual ? " selected" : ""}>` +
+    `${esc(n.nombre)} · ${n.porcentaje}%</option>`).join("");
+
+  const d = await (await fetch("/api/nicho/" + encodeURIComponent(nichoActual))).json();
+  $("#vistaNichos").innerHTML = fichaNicho(d) + formularioNuevoNicho();
+}
+
+function formularioNuevoNicho() {
+  return `<div class="nuevo" style="padding:0 18px 18px">
+    <input id="nuevoNicho" placeholder="nueva marca: negocio, ia, salud…">
+    <button onclick="crearNicho()">crear nicho</button>
+    <span class="ayuda">se crea con su kanban de montaje ya poblado</span>
+  </div>`;
+}
+
+async function crearNicho() {
+  const clave = $("#nuevoNicho").value.trim();
+  if (!clave) return;
+  const r = await (await fetch("/api/accion", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({accion: "crear_nicho", clave})})).json();
+  if (r.clave) nichoActual = r.clave;
+  $("#estado").textContent = r.error ? "error: " + r.error : r.mensaje;
+  cargarNichos();
+}
+
+function fichaNicho(d) {
+  const n = d.nicho, p = d.progreso;
+  const cuentas = d.cuentas.map((c) => {
+    const indice = d.escalera.indexOf(c.etapa);
+    const pasos = d.escalera.map((e, i) =>
+      `<div class="paso ${c.etapa === "error" ? "error" : (i <= indice ? "hecho" : "")}"
+         title="${esc(d.etiquetas_cuenta[e])}"></div>`).join("");
+    return `<div class="cuentaRed">
+      <h4><span class="etq ${esc(c.red)}">${esc(c.red)}</span>
+          <span>${esc(c.handle || "sin handle")}</span></h4>
+      <div class="escalera">${pasos}</div>
+      <div class="meta">${esc(d.etiquetas_cuenta[c.etapa] || c.etapa)}</div>
+      <select onchange="moverCuenta(${c.id}, this.value)">
+        ${[...d.escalera, "error"].map((e) =>
+          `<option value="${e}"${e === c.etapa ? " selected" : ""}>${esc(d.etiquetas_cuenta[e])}</option>`).join("")}
+      </select>
+      ${c.estrategia ? `<p class="estrategia">${esc(c.estrategia)}</p>` : ""}
+    </div>`;
+  }).join("");
+
+  const columnas = d.columnas.map((col) => `
+    <section class="columna">
+      <header>
+        <h2>${esc(col.titulo)} <span class="cuenta">${col.hechas}/${col.total}</span></h2>
+        <p class="ayuda">${esc(col.ayuda)}</p>
+      </header>
+      <div class="pila">
+        ${col.tareas.map((t) => `
+          <article class="tarjeta tarea ${t.hecha ? "hecha" : ""}" style="grid-template-columns:auto 1fr">
+            <input type="checkbox" ${t.hecha ? "checked" : ""}
+                   onchange="marcarTarea(${t.id}, this.checked)">
+            <div>
+              <p class="titulo">${esc(t.titulo)}</p>
+              ${t.detalle ? `<div class="meta">${esc(t.detalle)}</div>` : ""}
+            </div>
+          </article>`).join("") || '<p class="vacio">nada por aquí</p>'}
+      </div>
+    </section>`).join("");
+
+  return `<div class="fichaNicho">
+    <div class="cabeceraNicho">
+      <h2>${esc(n.nombre)}</h2>
+      <span class="perfil">credenciales __${esc(d.perfil)}</span>
+      <span class="ayuda">${p.tareas_hechas}/${p.tareas_totales} tareas ·
+        ahora en <b>${esc(p.etapa_actual)}</b> ·
+        ${p.listas}/${d.cuentas.length} cuentas listas para publicar</span>
+    </div>
+    <div class="progreso"><div style="width:${p.porcentaje}%"></div></div>
+
+    <h3 style="font-size:12px;color:var(--suave);text-transform:uppercase;letter-spacing:.8px">Cuentas</h3>
+    <div class="cuentas">${cuentas || '<p class="ayuda">Ninguna todavía.</p>'}</div>
+    <div class="nuevo">
+      <select id="nuevaRed">${["instagram","tiktok","youtube","x"].map((r) =>
+        `<option>${r}</option>`).join("")}</select>
+      <input id="nuevoHandle" placeholder="@handle">
+      <input id="nuevaEstrategia" placeholder="qué se publica aquí y cada cuánto" size="34">
+      <button onclick="crearCuenta()">añadir cuenta</button>
+    </div>
+  </div>
+  <div class="tablero">${columnas}</div>`;
+}
+
+async function accionNicho(cuerpo) {
+  const r = await (await fetch("/api/accion", {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(cuerpo)})).json();
+  await cargarNichos();
+  $("#estado").textContent = r.error ? "error: " + r.error : r.mensaje;
+}
+
+const marcarTarea = (id, hecha) => accionNicho({accion: "tarea", id, hecha});
+const moverCuenta = (id, etapa) => accionNicho({accion: "cuenta_etapa", id, etapa});
+const crearCuenta = () => accionNicho({accion: "cuenta_nueva", nicho: nichoActual,
+  red: $("#nuevaRed").value, handle: $("#nuevoHandle").value.trim(),
+  estrategia: $("#nuevaEstrategia").value.trim()});
+
+$("#fNicho").onchange = (e) => { nichoActual = e.target.value; cargarNichos(); };
+
+for (const s of ["#fPlataforma", "#fCarpeta"]) $(s).onchange = cargar;
+let teclado;
+$("#fTexto").oninput = () => { clearTimeout(teclado); teclado = setTimeout(cargar, 300); };
+document.onkeydown = (e) => { if (e.key === "Escape") cerrar(); };
+
+cargar();
+setInterval(() => { if (refrescoAutomatico) cargar(); }, 10000);
+</script>
+</body>
+</html>
