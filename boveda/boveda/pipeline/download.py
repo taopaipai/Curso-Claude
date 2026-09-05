@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from .. import comentarios as com
 from .. import db
 
 
@@ -38,9 +39,18 @@ def _opciones_comunes(cfg: Config) -> list[str]:
     return opciones
 
 
-def metadatos(cfg: Config, url: str) -> dict[str, Any]:
+def metadatos(cfg: Config, url: str, plataforma: str | None = None) -> dict[str, Any]:
+    """Pide toda la ficha de la publicacion, con comentarios si la plataforma
+    los da. Es la misma llamada, asi que los comentarios salen gratis."""
+    opciones = list(_opciones_comunes(cfg))
+    if plataforma and com.soporta_comentarios(plataforma):
+        opciones.append("--write-comments")
+        if plataforma == "youtube":
+            # Los queremos por votos y sin respuestas: solo el primer nivel.
+            opciones += ["--extractor-args",
+                         f"youtube:comment_sort=top;max_comments={com.TOPE},{com.TOPE},0,0"]
     salida = subprocess.run(
-        ["yt-dlp", *_opciones_comunes(cfg), "--dump-single-json", "--skip-download", url],
+        ["yt-dlp", *opciones, "--dump-single-json", "--skip-download", url],
         capture_output=True, text=True, check=True,
     )
     return json.loads(salida.stdout)
@@ -74,22 +84,23 @@ def descargar_video(cfg: Config, url: str, item_id: int) -> Path | None:
     return encontrados[0] if encontrados else None
 
 
-def _metricas(info: dict[str, Any]) -> str:
-    campos = ("view_count", "like_count", "comment_count", "repost_count",
-              "channel_follower_count", "average_rating")
-    return json.dumps({c: info.get(c) for c in campos if info.get(c) is not None})
-
-
 def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> None:
     """Descarga un item y actualiza su fila. Los errores quedan en `items.error`."""
     url = item["url_canonica"]
     try:
-        info = metadatos(cfg, url)
+        info = metadatos(cfg, url, item["plataforma"])
         audio = descargar_audio(cfg, url, item["id"])
         video = descargar_video(cfg, url, item["id"]) if cfg.guardar_video else None
 
         fecha = info.get("upload_date")  # YYYYMMDD
         publicado = f"{fecha[:4]}-{fecha[4:6]}-{fecha[6:]}" if fecha and len(fecha) == 8 else None
+        publicado_ts = com.momento_publicacion(info)
+
+        # La ficha entera se guarda en crudo: hoy no sabemos que campo nos hara
+        # falta dentro de dos anos, y volver a pedirla puede ser imposible.
+        ficha = {k: v for k, v in info.items()
+                 if k not in ("formats", "thumbnails", "automatic_captions",
+                              "subtitles", "requested_downloads", "comments")}
 
         con.execute(
             """
@@ -112,12 +123,18 @@ def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> None:
                 int(info["duration"]) if info.get("duration") else None,
                 publicado,
                 info.get("language"),
-                _metricas(info),
+                json.dumps(ficha, ensure_ascii=False, default=str),
                 str(audio),
                 str(video) if video else None,
                 item["id"],
             ),
         )
+        con.execute("UPDATE items SET publicado_ts = COALESCE(?, publicado_ts) WHERE id = ?",
+                    (publicado_ts, item["id"]))
+        com.guardar_metricas(con, item["id"], com.metricas(info))
+        com.guardar(con, item["id"],
+                    com.normalizar(info.get("comments") or [], item["plataforma"],
+                                   publicado_ts))
         db.marcar(con, item["id"], "descargado", None)
         db.reindexar(con, item["id"])
     except subprocess.CalledProcessError as exc:
@@ -125,3 +142,21 @@ def procesar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> None:
         db.marcar(con, item["id"], "error_descarga", detalle[-1] if detalle else str(exc))
     except Exception as exc:  # noqa: BLE001 - un item roto no debe parar el lote
         db.marcar(con, item["id"], "error_descarga", str(exc))
+
+
+def refrescar(cfg: Config, con: sqlite3.Connection, item: sqlite3.Row) -> int:
+    """Vuelve a pedir metricas y comentarios de un item ya descargado.
+
+    Sirve para seguir la evolucion: cada pasada deja otra instantanea en
+    `metricas`, que es como se ve si un guardado viejo sigue creciendo.
+    Devuelve cuantos comentarios se guardaron.
+    """
+    info = metadatos(cfg, item["url_canonica"], item["plataforma"])
+    publicado_ts = com.momento_publicacion(info) or item["publicado_ts"]
+    com.guardar_metricas(con, item["id"], com.metricas(info))
+    con.execute("UPDATE items SET publicado_ts = COALESCE(?, publicado_ts) WHERE id = ?",
+                (publicado_ts, item["id"]))
+    con.commit()
+    return com.guardar(con, item["id"],
+                       com.normalizar(info.get("comments") or [], item["plataforma"],
+                                      publicado_ts))

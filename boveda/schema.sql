@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS items (
     publicado_en   TEXT,
     guardado_en    TEXT,                      -- cuando lo guardaste tu, si el export lo trae
     idioma         TEXT,
-    metricas_json  TEXT,                      -- views/likes/comments tal como los reporta la plataforma
+    metricas_json  TEXT,                      -- todo lo que reporta la plataforma, en crudo
+    publicado_ts   INTEGER,                   -- epoch de publicacion, para fechar los comentarios
+    vistas         INTEGER,
+    likes          INTEGER,
+    comentarios_n  INTEGER,
+    compartidos    INTEGER,
+    guardados      INTEGER,                   -- solo TikTok lo publica
     crudo_json     TEXT,                      -- el registro original del export, sin tocar
     ruta_media     TEXT,
     ruta_audio     TEXT,
@@ -52,6 +58,44 @@ CREATE TABLE IF NOT EXISTS transcripciones (
     segmentos_json TEXT,                      -- [{inicio, fin, texto}, ...] para citar con timestamp
     creado_en      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Los comentarios mas votados de cada publicacion. Son la reaccion real del
+-- publico: que parte del video comento la gente, que objeto, que pidio. Sirven
+-- tanto para el analisis como para saber que responder cuando publiquemos lo
+-- nuestro.
+CREATE TABLE IF NOT EXISTS comentarios (
+    id             INTEGER PRIMARY KEY,
+    item_id        INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    id_externo     TEXT,
+    posicion       INTEGER NOT NULL,          -- 1 = el mas votado
+    autor          TEXT,
+    es_del_autor   INTEGER NOT NULL DEFAULT 0,
+    texto          TEXT NOT NULL,
+    likes          INTEGER,
+    publicado_ts   INTEGER,
+    segundos_tras  INTEGER,                   -- cuanto despues del video se escribio
+    tiempo_exacto  INTEGER NOT NULL DEFAULT 0, -- 0 = estimado a partir de "hace 3 meses"
+    capturado_en   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (item_id, posicion)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comentarios_item ON comentarios(item_id);
+
+-- Instantanea de las metricas cada vez que se consulta la publicacion. Un
+-- guardado de 2019 vale precisamente por como se movia entonces; si solo
+-- guardamos el ultimo numero, esa historia se pierde.
+CREATE TABLE IF NOT EXISTS metricas (
+    id           INTEGER PRIMARY KEY,
+    item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    capturado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    vistas       INTEGER,
+    likes        INTEGER,
+    comentarios  INTEGER,
+    compartidos  INTEGER,
+    guardados    INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_metricas_item ON metricas(item_id, capturado_en);
 
 -- Texto quemado en pantalla, leido de los fotogramas. Para los videos de puro
 -- texto (carruseles animados, reels sin voz) esto ES el contenido: sin esto el

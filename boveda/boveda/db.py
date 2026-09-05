@@ -18,8 +18,28 @@ def conectar(ruta: Path) -> sqlite3.Connection:
     return con
 
 
+# Columnas anadidas despues de la primera version. Las tablas nuevas las crea
+# solo el CREATE TABLE IF NOT EXISTS, pero una columna nueva en una tabla que ya
+# existe hay que anadirla a mano.
+COLUMNAS_NUEVAS: dict[str, dict[str, str]] = {
+    "items": {
+        "publicado_ts": "INTEGER",
+        "vistas": "INTEGER",
+        "likes": "INTEGER",
+        "comentarios_n": "INTEGER",
+        "compartidos": "INTEGER",
+        "guardados": "INTEGER",
+    },
+}
+
+
 def inicializar(con: sqlite3.Connection) -> None:
     con.executescript(ESQUEMA.read_text(encoding="utf-8"))
+    for tabla, columnas in COLUMNAS_NUEVAS.items():
+        existentes = {f["name"] for f in con.execute(f"PRAGMA table_info({tabla})")}
+        for nombre, tipo in columnas.items():
+            if nombre not in existentes:
+                con.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}")
     con.commit()
 
 

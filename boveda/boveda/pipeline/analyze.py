@@ -203,6 +203,20 @@ def _contexto(con: sqlite3.Connection, item: sqlite3.Row) -> str:
     if linea_tiempo:
         partes.append(f"SEGMENTOS CON TIEMPO:\n{linea_tiempo}")
 
+    top = con.execute(
+        "SELECT autor, texto, likes, segundos_tras, tiempo_exacto, es_del_autor "
+        "FROM comentarios WHERE item_id = ? ORDER BY posicion LIMIT 8", (item["id"],)
+    ).fetchall()
+    if top:
+        from ..comentarios import humanizar
+        partes.append("COMENTARIOS MAS VOTADOS (la reaccion real del publico):\n" + "\n".join(
+            f"[{c['likes'] or 0} likes · {humanizar(c['segundos_tras'])}"
+            f"{' aprox' if not c['tiempo_exacto'] else ''} despues"
+            f"{' · AUTOR DEL VIDEO' if c['es_del_autor'] else ''}] "
+            f"{(c['texto'] or '')[:400]}"
+            for c in top
+        ))
+
     pantalla = con.execute(
         "SELECT texto, motor FROM ocr WHERE item_id = ?", (item["id"],)
     ).fetchone()

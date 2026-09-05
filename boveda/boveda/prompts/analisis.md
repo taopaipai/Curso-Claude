@@ -22,5 +22,9 @@ Reglas:
 - `aplicabilidad.para_nosotros` son acciones concretas que podriamos ejecutar,
   no elogios. `para_ensenar` son las lecciones extraibles para explicarle a otro
   como se hace.
+- Si vienen comentarios, usalos como prueba de que funciono y que no: que parte
+  entendio la gente, que objeto, que pidio. Un comentario muy votado que hace
+  una pregunta es un video entero para nosotros; anotalo en
+  `aplicabilidad.para_nosotros`. No los cites literalmente: son de sus autores.
 - En `datos_y_afirmaciones` anota cada afirmacion factual fuerte y si es
   verificable, para poder auditarla antes de reutilizarla.

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import dataclasses
 
+from . import comentarios as com
 from . import config, db, export, montaje, publicador
 from .ingest import IMPORTADORES
 from .publish import FORMATOS, REDES
@@ -235,6 +236,90 @@ def cmd_producir(args) -> int:
     fila = con.execute("SELECT cuerpo FROM producciones WHERE id = ?", (prod_id,)).fetchone()
     print(fila["cuerpo"])
     print(f"\n-- guardado como produccion #{prod_id}", file=sys.stderr)
+    con.close()
+    return 0
+
+
+def cmd_comentarios(args) -> int:
+    cfg, con = _abrir(args)
+
+    if args.capacidades:
+        print("Que se puede extraer de cada plataforma:\n")
+        print(f"  {'':<11}{'comentarios':<13}{'fecha exacta':<14}{'guardados':<11}")
+        for nombre, datos in sorted(com.CAPACIDADES.items()):
+            if nombre == "web":
+                continue
+            print(f"  {nombre:<11}{'si' if datos['comentarios'] else 'NO':<13}"
+                  f"{'si' if datos['tiempo_exacto'] else 'aprox' if datos['comentarios'] else '-':<14}"
+                  f"{'si' if datos['guardados'] else 'no':<11}")
+            print(f"    {datos['nota']}")
+        con.close()
+        return 0
+
+    if args.actualizar:
+        try:
+            download.comprobar_dependencias()
+        except download.HerramientaFaltante as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        sql = ("SELECT * FROM items WHERE estado NOT IN ('importado','error_descarga')")
+        argumentos = []
+        if args.plataforma:
+            sql += " AND plataforma = ?"
+            argumentos.append(args.plataforma)
+        sql += " ORDER BY actualizado_en"
+        if args.limite:
+            sql += f" LIMIT {int(args.limite)}"
+        filas = con.execute(sql, argumentos).fetchall()
+        if not filas:
+            print("No hay items descargados que refrescar.")
+            con.close()
+            return 0
+        fallos = 0
+        for i, item in enumerate(filas, 1):
+            print(f"[{i}/{len(filas)}] #{item['id']} {(item['titulo'] or '')[:60]}", flush=True)
+            try:
+                cuantos = download.refrescar(cfg, con, item)
+            except Exception as exc:  # noqa: BLE001
+                fallos += 1
+                print(f"    ! {exc}", file=sys.stderr)
+                continue
+            print(f"    metricas al dia, {cuantos} comentarios")
+        con.close()
+        print(f"Listo: {len(filas) - fallos} ok, {fallos} con error.")
+        return 1 if fallos == len(filas) else 0
+
+    if args.item_id is None:
+        print("Indica un item, o usa --actualizar / --capacidades", file=sys.stderr)
+        return 1
+
+    item = con.execute("SELECT * FROM items WHERE id = ?", (args.item_id,)).fetchone()
+    if item is None:
+        print(f"No existe el item {args.item_id}", file=sys.stderr)
+        return 1
+    filas = con.execute(
+        "SELECT * FROM comentarios WHERE item_id = ? ORDER BY posicion", (args.item_id,)
+    ).fetchall()
+
+    print(f"#{item['id']} [{item['plataforma']}] {item['titulo'] or item['url_canonica']}")
+    print(f"  {item['vistas'] or '?'} vistas · {item['likes'] or '?'} likes · "
+          f"{item['comentarios_n'] or '?'} comentarios · "
+          f"{item['guardados'] if item['guardados'] is not None else '-'} guardados")
+    if not filas:
+        capaz = com.CAPACIDADES.get(item["plataforma"], {})
+        motivo = ("" if capaz.get("comentarios")
+                  else f"  ({capaz.get('nota', 'no se pueden extraer en esta plataforma')})")
+        print(f"\n  Sin comentarios guardados.{motivo}")
+        con.close()
+        return 0
+
+    print()
+    for fila in filas:
+        marca = "" if fila["tiempo_exacto"] else " aprox"
+        autor = f"{fila['autor'] or '?'}{' (autor)' if fila['es_del_autor'] else ''}"
+        print(f"  {fila['posicion']:>2}. [{fila['likes'] or 0} likes · "
+              f"{com.humanizar(fila['segundos_tras'])}{marca} despues] {autor}")
+        print(f"      {fila['texto'][:300]}")
     con.close()
     return 0
 
@@ -457,6 +542,14 @@ def cmd_estado(args) -> int:
         "FROM analisis GROUP BY vigencia_estado ORDER BY n DESC"
     ):
         print(f"  {fila['vigencia_estado'] or '-':<22} {fila['n']}  (valor historico medio {fila['v']})")
+    fila = con.execute(
+        "SELECT COUNT(DISTINCT item_id) n, COUNT(*) total FROM comentarios").fetchone()
+    print(f"\nComentarios capturados: {fila['total']} en {fila['n']} publicaciones")
+    guardados = con.execute(
+        "SELECT COUNT(*) n FROM items WHERE guardados IS NOT NULL").fetchone()["n"]
+    if guardados:
+        print(f"Con nº de guardados (solo TikTok): {guardados}")
+
     print("\nProducciones:")
     for fila in con.execute(
         "SELECT estado, COUNT(*) n FROM producciones GROUP BY estado ORDER BY n DESC"
@@ -530,6 +623,16 @@ def construir_parser() -> argparse.ArgumentParser:
     pro.add_argument("--nicho")
     pro.add_argument("--notas", help="indicaciones extra para el guionista")
     pro.set_defaults(func=cmd_producir)
+
+    coms = sub.add_parser("comentarios", help="los comentarios mas votados de una publicacion")
+    coms.add_argument("item_id", type=int, nargs="?")
+    coms.add_argument("--actualizar", action="store_true",
+                      help="vuelve a pedir metricas y comentarios de lo ya descargado")
+    coms.add_argument("--capacidades", action="store_true",
+                      help="que se puede extraer de cada plataforma")
+    coms.add_argument("--limite", type=int)
+    coms.add_argument("--plataforma")
+    coms.set_defaults(func=cmd_comentarios)
 
     mon = sub.add_parser("montar", help="arma el video: voz, subtitulos y fondo")
     mon.add_argument("produccion_id", type=int)

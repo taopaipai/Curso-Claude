@@ -140,6 +140,52 @@ boveda reintentar                      # devuelve a la cola lo que falló
 Empieza siempre con `--limite 10` en una plataforma para ver que las cookies y
 el audio funcionan antes de lanzarte a miles de items.
 
+### Qué se captura de cada favorito
+
+Al descargar, además del audio se guarda **la ficha entera de la publicación tal
+como la reporta la plataforma** (menos formatos y miniaturas, que son ruido), las
+métricas, y los **20 comentarios más votados**:
+
+```bash
+boveda comentarios 42                 # los comentarios guardados de un item
+boveda comentarios --capacidades      # qué se puede sacar de cada plataforma
+boveda comentarios --actualizar       # vuelve a pedir métricas y comentarios
+```
+
+Lo que se puede extraer **cambia por plataforma**, y conviene saberlo antes de
+esperar datos que no van a llegar:
+
+| | YouTube | TikTok | Instagram |
+|---|---|---|---|
+| vistas, likes, nº de comentarios | sí | sí | a veces |
+| compartidos | no | sí | no |
+| **nº de guardados** | no | **sí** | no |
+| top 20 comentarios | sí, pedidos por votos | **no** | los que dé la API, ordenados aquí |
+| cuándo se escribió el comentario | **aproximado** | — | **exacto** |
+
+Dos asimetrías que no son un fallo del código:
+
+- **TikTok es la única que publica el número de guardados** (`collect_count`), y
+  la única de la que no se pueden sacar comentarios: yt-dlp no los implementa
+  para TikTok. En las otras dos redes los guardados solo los ve el dueño de la
+  cuenta en su panel de estadísticas; no hay forma pública de leerlos.
+- **En YouTube la fecha del comentario es una estimación.** La plataforma no da
+  la fecha exacta, solo un texto tipo "hace 3 meses", y de ahí se deduce. Queda
+  marcado en la columna `tiempo_exacto` para que nadie lo trate como dato duro, y
+  si la estimación cae antes de la publicación del vídeo se guarda vacía en vez
+  de guardar un número falso. En Instagram el dato sí es exacto.
+
+**Cada consulta deja una instantánea** en la tabla `metricas`. Esto es a
+propósito: un guardado de 2019 vale precisamente por cómo se movía entonces, y si
+solo guardáramos el último número, esa historia se perdería. `boveda comentarios
+--actualizar` es lo que ejecutas de vez en cuando para ver si un guardado viejo
+sigue creciendo.
+
+**Los comentarios entran en el análisis.** Son la reacción real del público: qué
+entendió la gente, qué objetó, qué pidió. Un comentario muy votado que hace una
+pregunta es un vídeo entero para ti, y el análisis lo anota en
+`aplicabilidad.para_nosotros`.
+
 ### Videos de puro texto (OCR de fotogramas)
 
 Un reel que solo muestra rótulos no tiene nada que transcribir. `boveda ocr`
@@ -436,6 +482,7 @@ boveda/
       analyze.py          Claude + esquema JSON del análisis
       repurpose.py        generación de contenido nuevo
     prompts/              los prompts, en archivos aparte para que los edites
+    comentarios.py        top 20 comentarios, métricas y sus instantáneas
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
     alineacion.py         whisperx: alineación forzada palabra por palabra
@@ -443,8 +490,8 @@ boveda/
     web.py                HTTP compartido por las redes y los bancos de b-roll
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  91 pruebas, sin red (Claude, whisperx, redes y bancos
-                          de b-roll simulados; el vídeo se monta con ffmpeg real)
+  tests/                  110 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
+                          bancos simulados; el vídeo se monta con ffmpeg real)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 
@@ -461,6 +508,7 @@ python -m pytest        # correr las pruebas
   guion. Si quieres algo exacto, tu videoteca (`--broll local`) da mejor
   resultado que cualquier banco.
 - Los cortes entre clips son secos, sin transiciones ni efecto Ken Burns.
+- No hay panel visual todavía: todo se maneja desde la línea de comandos.
 - La alineación corre en CPU por defecto y no es instantánea: la primera escena
   paga además la carga del modelo wav2vec2. Con GPU, `BOVEDA_ALIGN_DEVICE=cuda`.
 - No detecta duplicados semánticos (el mismo consejo reempaquetado por diez
