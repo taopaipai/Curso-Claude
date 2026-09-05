@@ -173,6 +173,61 @@ CREATE TABLE IF NOT EXISTS montajes (
     creado_en     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Un nicho es una marca con su propio publico: marketing, negocio, IA. Cada uno
+-- lleva su montaje por separado para que no se mezclen entre si.
+CREATE TABLE IF NOT EXISTS nichos (
+    id          INTEGER PRIMARY KEY,
+    clave       TEXT NOT NULL UNIQUE,      -- identificador corto: marketing, ia, negocio
+    nombre      TEXT NOT NULL,
+    descripcion TEXT,
+    publico     TEXT,                      -- a quien le habla
+    promesa     TEXT,                      -- que le promete
+    tono        TEXT,
+    color       TEXT,
+    etapa       TEXT NOT NULL DEFAULT 'definicion',
+    creado_en   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Las cuentas de un nicho en cada red. Aqui NO hay credenciales: solo el mapa de
+-- que cuenta corresponde a que nicho. Los tokens viven en el .env con el sufijo
+-- del nicho (IG_ACCESS_TOKEN__MARKETING), asi que la base se puede copiar,
+-- exportar o compartir sin llevarse ningun secreto dentro.
+CREATE TABLE IF NOT EXISTS cuentas (
+    id          INTEGER PRIMARY KEY,
+    nicho_id    INTEGER NOT NULL REFERENCES nichos(id) ON DELETE CASCADE,
+    red         TEXT NOT NULL,
+    handle      TEXT,                      -- @loquesea: el usuario de esa red
+    url         TEXT,
+    etapa       TEXT NOT NULL DEFAULT 'sin_crear',
+                -- sin_crear -> creada -> app -> token -> verificada  (o error)
+                -- creada:     la cuenta existe en la red
+                -- app:        la app / proyecto de desarrollador esta dado de alta
+                -- token:      las credenciales estan puestas en el .env
+                -- verificada: se ha hablado con la API y respondio
+    estrategia  TEXT,                      -- que se publica aqui y cada cuanto
+    notas       TEXT,
+    verificado_en TEXT,
+    creado_en   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (nicho_id, red)
+);
+
+-- El kanban de montaje de cada nicho: las tareas para pasar de "se me ocurrio"
+-- a "publicando". Se siembran de una plantilla al crear el nicho.
+CREATE TABLE IF NOT EXISTS tareas_nicho (
+    id           INTEGER PRIMARY KEY,
+    nicho_id     INTEGER NOT NULL REFERENCES nichos(id) ON DELETE CASCADE,
+    etapa        TEXT NOT NULL,            -- definicion | marca | cuentas | acceso | contenido | activo
+    orden        INTEGER NOT NULL DEFAULT 0,
+    titulo       TEXT NOT NULL,
+    detalle      TEXT,
+    red          TEXT,                     -- si la tarea es de una red concreta
+    hecha        INTEGER NOT NULL DEFAULT 0,
+    completado_en TEXT,
+    creado_en    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tareas_nicho ON tareas_nicho(nicho_id, etapa, orden);
+
 -- Cada intento de publicar una produccion en una red. Es el registro de lo que
 -- de verdad salio: nada se publica sin una fila aqui, y nada se publica dos
 -- veces (indice unico sobre lo ya publicado).
@@ -180,6 +235,7 @@ CREATE TABLE IF NOT EXISTS publicaciones (
     id             INTEGER PRIMARY KEY,
     produccion_id  INTEGER NOT NULL REFERENCES producciones(id) ON DELETE CASCADE,
     red            TEXT NOT NULL,            -- instagram | tiktok | youtube | x | archivo
+    cuenta_id      INTEGER REFERENCES cuentas(id) ON DELETE SET NULL,
     estado         TEXT NOT NULL DEFAULT 'programada',
                    -- programada -> publicada | error | cancelada
     programado_para TEXT,                    -- ISO-8601; NULL = en cuanto se procese la cola

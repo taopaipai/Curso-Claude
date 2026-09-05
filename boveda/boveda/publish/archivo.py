@@ -18,11 +18,11 @@ NOMBRE = "archivo"
 NECESITA_MEDIA = None
 
 
-def configurada(cfg: Config) -> bool:
+def configurada(cfg: Config, perfil: str | None = None) -> bool:
     return True
 
 
-def verificar(cfg: Config) -> str:
+def verificar(cfg: Config, perfil: str | None = None) -> str:
     return f"carpeta local {cfg.publicaciones}"
 
 

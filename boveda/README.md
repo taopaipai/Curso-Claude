@@ -77,6 +77,68 @@ cp .env.example .env
 boveda init
 ```
 
+## Nichos: una marca, sus cuentas, su montaje
+
+Un nicho es una marca con su propio público: marketing, negocio, IA. Cada uno
+lleva **su propio kanban de montaje** para que el estado de uno no se confunda
+con el de otro.
+
+```bash
+boveda nicho crear marketing --nombre "Marketing Directo"
+boveda nicho cuenta marketing --red instagram --handle @marcadirecta \
+       --estrategia "1 reel diario a las 18h"
+boveda nicho ver marketing        # el montaje y las cuentas
+boveda nicho listar               # por dónde va cada marca
+```
+
+Al crear un nicho se siembra su kanban con las tareas reales, incluidos los
+trámites lentos de cada plataforma —la auditoría de TikTok, la página de
+Facebook que exige Instagram— porque son los que deciden cuándo puedes empezar
+de verdad. Las etapas son **Definición → Marca → Cuentas → Acceso API →
+Contenido → Activo**, y en el panel las marcas cada una con un clic.
+
+### La escalera de cada cuenta
+
+Una cuenta puede existir pero no tener token todavía, así que cada una lleva su
+propio recorrido, aparte del recorrido del nicho:
+
+```
+sin crear → cuenta creada → app dada de alta → token en el .env → verificada
+```
+
+En el panel se ve como una barra de segmentos por cuenta, con su handle y su
+estrategia debajo. `boveda redes --nicho marketing --verificar` llama a cada API
+y **mueve la cuenta a `verificada` sola** si responde, o a `error` con el motivo
+si no.
+
+### Las credenciales no se guardan en la base
+
+Cada nicho es un **perfil**, y sus tokens viven en el `.env` con el sufijo del
+perfil:
+
+```bash
+IG_USER_ID__MARKETING=17841400000000000
+IG_ACCESS_TOKEN__MARKETING=EAA...
+IG_ACCESS_TOKEN__IA=EAA...          # otra marca, otra cuenta
+TIKTOK_ACCESS_TOKEN=act...          # sin sufijo: sirve de reserva para todos
+```
+
+Se busca primero la del nicho y, si no existe, la general. Así la base de datos
+se puede copiar, exportar o compartir sin llevarse **un solo secreto dentro**, y
+añadir una marca es añadir variables, no tocar código.
+
+### Una publicación, todas sus redes
+
+```bash
+boveda publicar 7 --nicho marketing              # ensayo: dice a dónde iría
+boveda publicar 7 --nicho marketing --confirmar  # sale en todas sus cuentas listas
+```
+
+Reparte a todas las cuentas del nicho que ya tienen credenciales. **Cada red
+recibe su propia fila**, así que si una falla las demás siguen y luego se ve
+exactamente dónde salió y dónde no. Una red cuyo formato no encaja (un reel en
+un hilo de X) se salta con su motivo, sin frenar al resto.
+
 ## El panel
 
 ```bash
@@ -97,7 +159,10 @@ completa: métricas con su historial de instantáneas, gancho, estructura con
 tiempos, qué es aplicable para nosotros y para enseñar, los comentarios más
 votados con cuánto tardaron en llegar, las producciones y sus publicaciones.
 
-Arriba filtras por plataforma, por colección o buscando texto — que es como
+Tiene dos pestañas: **Contenido**, el tablero de arriba, y **Nichos**, donde
+cada marca abre su propio kanban de montaje con sus cuentas.
+
+En Contenido filtras por plataforma, por colección o buscando texto — que es como
 trabajas por nichos. Desde las tarjetas puedes aprobar un borrador, devolverlo,
 reintentar lo que falló o quitar algo de la cola.
 
@@ -515,6 +580,7 @@ boveda/
       repurpose.py        generación de contenido nuevo
     prompts/              los prompts, en archivos aparte para que los edites
     comentarios.py        top 20 comentarios, métricas y sus instantáneas
+    nichos.py             marcas: montaje, cuentas y credenciales por perfil
     panel/                el tablero kanban: servidor local + una página
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
@@ -523,7 +589,7 @@ boveda/
     web.py                HTTP compartido por las redes y los bancos de b-roll
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  124 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
+  tests/                  150 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
                           bancos simulados; el vídeo se monta con ffmpeg real y
                           el panel se prueba levantando el servidor)
   data/                   todo lo que genera el proyecto (fuera de git)

@@ -12,6 +12,8 @@ Flujo tipico:
     boveda aprobar 7
     boveda montar 7 --fondo fondo.jpg       # voz + subtitulos + video
     boveda publicar 7 --red instagram --confirmar
+    boveda nicho crear marketing            # una marca nueva, con su kanban
+    boveda publicar 7 --nicho marketing --confirmar   # sale en todas sus redes
     boveda panel                            # el tablero, en el navegador
     boveda exportar --formato md
 """
@@ -27,7 +29,7 @@ from pathlib import Path
 import dataclasses
 
 from . import comentarios as com
-from . import config, db, export, montaje, panel, publicador
+from . import config, db, export, montaje, nichos, panel, publicador
 from .ingest import IMPORTADORES
 from .publish import FORMATOS, REDES
 from .pipeline import analyze, download, ocr, repurpose, transcribe
@@ -241,6 +243,106 @@ def cmd_producir(args) -> int:
     return 0
 
 
+def _barra(hechas: int, total: int, ancho: int = 18) -> str:
+    llenas = round(ancho * hechas / total) if total else 0
+    return "█" * llenas + "·" * (ancho - llenas)
+
+
+def cmd_nicho(args) -> int:
+    cfg, con = _abrir(args)
+    try:
+        return _nicho(cfg, con, args)
+    except nichos.ErrorNicho as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+
+
+def _nicho(cfg, con, args) -> int:
+    from .publish import REDES
+
+    if args.sub == "crear":
+        nichos.crear(con, args.clave, args.nombre, args.descripcion)
+        nicho = nichos.obtener(con, args.clave)
+        perfil = nichos.perfil_env(nicho["clave"])
+        print(f"Nicho '{nicho['clave']}' creado con {len(nichos.PLANTILLA)} tareas de montaje.")
+        print(f"\nSus credenciales llevaran el sufijo __{perfil} en el .env. Por ejemplo:")
+        print(f"  IG_USER_ID__{perfil}=...")
+        print(f"  IG_ACCESS_TOKEN__{perfil}=...")
+        print(f"\nSiguiente paso: boveda nicho ver {nicho['clave']}")
+        return 0
+
+    if args.sub == "listar":
+        filas = nichos.listar(con)
+        if not filas:
+            print("Todavia no hay nichos. Crea uno: boveda nicho crear marketing")
+            return 0
+        for nicho in filas:
+            listas = f"{nicho['listas']}/{len(nicho['cuentas'])} cuentas listas" \
+                if nicho["cuentas"] else "sin cuentas"
+            print(f"  {nicho['clave']:<14} {_barra(nicho['tareas_hechas'], nicho['tareas_totales'])} "
+                  f"{nicho['porcentaje']:>3}%  en {nicho['etapa_actual']:<11} {listas}")
+        return 0
+
+    nicho = nichos.obtener(con, args.clave)
+    perfil = nichos.perfil_env(nicho["clave"])
+
+    if args.sub == "cuenta":
+        if args.borrar:
+            nichos.borrar_cuenta(con, args.borrar)
+            print(f"Cuenta {args.borrar} borrada.")
+            return 0
+        cuenta_id = nichos.anadir_cuenta(con, nicho["clave"], args.red, args.handle,
+                                         args.url, args.estrategia, args.etapa)
+        print(f"Cuenta {args.red} del nicho '{nicho['clave']}' en etapa '{args.etapa}' "
+              f"(#{cuenta_id}).")
+        if args.etapa in ("token", "verificada"):
+            print(f"Recuerda las variables con sufijo __{perfil} en el .env.")
+        return 0
+
+    if args.sub == "tarea":
+        nichos.marcar_tarea(con, args.tarea_id, not args.deshacer)
+        print(f"Tarea {args.tarea_id} marcada como "
+              f"{'pendiente' if args.deshacer else 'hecha'}.")
+        return 0
+
+    # ver
+    datos = nichos.progreso(con, int(nicho["id"]))
+    print(f"{nicho['nombre']}  ({nicho['clave']})   perfil de credenciales: __{perfil}")
+    if nicho["descripcion"]:
+        print(f"  {nicho['descripcion']}")
+    print(f"  {_barra(datos['tareas_hechas'], datos['tareas_totales'])} "
+          f"{datos['porcentaje']}%  ·  ahora en: {datos['etapa_actual']}")
+
+    print("\nCuentas")
+    if not datos["cuentas"]:
+        print("  (ninguna)  anade una: boveda nicho cuenta "
+              f"{nicho['clave']} --red instagram --handle @tumarca")
+    for cuenta in nichos.cuentas(con, int(nicho["id"])):
+        escalera = " → ".join(
+            (e.upper() if e == cuenta["etapa"] else e) for e in nichos.ETAPAS_CUENTA)
+        print(f"  #{cuenta['id']:<3} {cuenta['red']:<10} {cuenta['handle'] or '(sin handle)':<20}"
+              f" {nichos.ETIQUETAS_CUENTA.get(cuenta['etapa'], cuenta['etapa'])}")
+        print(f"       {escalera}")
+        if cuenta["estrategia"]:
+            print(f"       estrategia: {cuenta['estrategia']}")
+
+    print("\nMontaje")
+    etapa_actual = None
+    for tarea in nichos.tareas(con, int(nicho["id"])):
+        if tarea["etapa"] != etapa_actual:
+            etapa_actual = tarea["etapa"]
+            titulo = next(e["titulo"] for e in nichos.ETAPAS if e["id"] == etapa_actual)
+            print(f"\n  {titulo.upper()}")
+        marca = "✓" if tarea["hecha"] else "·"
+        print(f"   {marca} [{tarea['id']:>3}] {tarea['titulo']}")
+        if tarea["detalle"] and not tarea["hecha"]:
+            print(f"         {tarea['detalle']}")
+    print(f"\n  Marcar una: boveda nicho tarea {nicho['clave']} <id>")
+    return 0
+
+
 def cmd_panel(args) -> int:
     cfg, con = _abrir(args)
     con.close()
@@ -391,22 +493,47 @@ def cmd_aprobar(args) -> int:
 
 
 def cmd_redes(args) -> int:
-    """Dice que redes estan configuradas y con que cuenta, sin publicar nada."""
+    """Dice que redes estan configuradas y con que cuenta, sin publicar nada.
+
+    Con --nicho mira las credenciales de ese nicho, y al verificar deja la etapa
+    de cada cuenta al dia: si la API responde, la cuenta pasa a 'verificada'.
+    """
     cfg, con = _abrir(args)
-    con.close()
+    perfil = None
+    cuentas_por_red: dict[str, Any] = {}
+    if args.nicho:
+        try:
+            nicho = nichos.obtener(con, args.nicho)
+        except nichos.ErrorNicho as exc:
+            print(exc, file=sys.stderr)
+            con.close()
+            return 1
+        perfil = nichos.perfil_env(nicho["clave"])
+        cuentas_por_red = {c["red"]: c for c in nichos.cuentas(con, int(nicho["id"]))}
+        print(f"Nicho {nicho['clave']} (perfil __{perfil})\n")
+
     for nombre in sorted(REDES):
         modulo = REDES[nombre]
         formatos = ", ".join(sorted(FORMATOS.get(nombre, set())))
-        if not modulo.configurada(cfg):
-            print(f"  {nombre:<10} sin credenciales      ({formatos})")
+        cuenta = cuentas_por_red.get(nombre)
+        etiqueta = f"{nombre:<10} {(cuenta['handle'] or '') if cuenta else '':<18}"
+
+        if not modulo.configurada(cfg, perfil):
+            print(f"  {etiqueta} sin credenciales      ({formatos})")
             continue
         if not args.verificar:
-            print(f"  {nombre:<10} configurada           ({formatos})")
+            print(f"  {etiqueta} configurada           ({formatos})")
             continue
         try:
-            print(f"  {nombre:<10} {modulo.verificar(cfg):<21} ({formatos})")
+            quien = modulo.verificar(cfg, perfil)
+            print(f"  {etiqueta} {quien:<21} ({formatos})")
+            if cuenta:
+                nichos.mover_cuenta(con, int(cuenta["id"]), "verificada")
         except Exception as exc:  # noqa: BLE001
-            print(f"  {nombre:<10} ERROR: {exc}", file=sys.stderr)
+            print(f"  {etiqueta} ERROR: {exc}", file=sys.stderr)
+            if cuenta:
+                nichos.mover_cuenta(con, int(cuenta["id"]), "error", str(exc)[:300])
+    con.close()
     if not args.verificar:
         print("\nUsa --verificar para comprobar los tokens contra cada API.")
     return 0
@@ -432,6 +559,12 @@ def _publicar_filas(cfg, con, filas, ensayo: bool) -> int:
 def cmd_publicar(args) -> int:
     """Programa y publica en un solo paso. Sin --confirmar es un ensayo."""
     cfg, con = _abrir(args)
+
+    if args.nicho:
+        return _publicar_en_nicho(cfg, con, args)
+    if not args.red:
+        print("Indica --red o --nicho", file=sys.stderr)
+        return 1
     try:
         pub_id = publicador.programar(
             con, args.produccion_id, args.red, cuando=args.cuando,
@@ -454,6 +587,45 @@ def cmd_publicar(args) -> int:
         publicador.cancelar(con, pub_id)
     con.close()
     return 1 if fallos else 0
+
+
+def _publicar_en_nicho(cfg, con, args) -> int:
+    """Una produccion, todas las redes de esa marca."""
+    try:
+        repartos = publicador.distribuir(con, args.produccion_id, args.nicho,
+                                         cuando=args.cuando, media=args.media,
+                                         forzar=args.forzar)
+    except (publicador.ErrorPublicacion, nichos.ErrorNicho) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    programadas = [r for r in repartos if r["ok"]]
+    for reparto in repartos:
+        if reparto["ok"]:
+            print(f"  {reparto['red']:<10} {reparto['handle'] or '':<20} en cola "
+                  f"(#{reparto['publicacion_id']})")
+        else:
+            print(f"  {reparto['red']:<10} se salta: {reparto['motivo']}", file=sys.stderr)
+    if not programadas:
+        print("Ninguna red admitio esta produccion.", file=sys.stderr)
+        return 1
+    if args.cuando:
+        print(f"\n{len(programadas)} publicaciones programadas para {args.cuando}.")
+        con.close()
+        return 0
+
+    filas = con.execute(
+        "SELECT * FROM publicaciones WHERE id IN ({})".format(
+            ",".join("?" * len(programadas))),
+        [r["publicacion_id"] for r in programadas],
+    ).fetchall()
+    fallos = _publicar_filas(cfg, con, filas, ensayo=not args.confirmar)
+    if not args.confirmar:
+        print("\nEsto fue un ensayo: no se envio nada. Repite con --confirmar.")
+        for reparto in programadas:
+            publicador.cancelar(con, reparto["publicacion_id"])
+    con.close()
+    return 1 if fallos == len(filas) else 0
 
 
 def cmd_cola(args) -> int:
@@ -666,11 +838,47 @@ def construir_parser() -> argparse.ArgumentParser:
     red = sub.add_parser("redes", help="que redes estan configuradas")
     red.add_argument("--verificar", action="store_true",
                      help="comprueba los tokens llamando a cada API")
+    red.add_argument("--nicho", help="comprueba las credenciales de ese nicho")
     red.set_defaults(func=cmd_redes)
+
+    nic = sub.add_parser("nicho", help="marcas: su montaje, sus cuentas y su kanban")
+    subnic = nic.add_subparsers(dest="sub", required=True)
+
+    crear = subnic.add_parser("crear", help="crea un nicho con su kanban de montaje")
+    crear.add_argument("clave")
+    crear.add_argument("--nombre")
+    crear.add_argument("--descripcion")
+    crear.set_defaults(func=cmd_nicho)
+
+    subnic.add_parser("listar", help="todos los nichos y por donde van").set_defaults(
+        func=cmd_nicho)
+
+    ver = subnic.add_parser("ver", help="el detalle de un nicho")
+    ver.add_argument("clave")
+    ver.set_defaults(func=cmd_nicho)
+
+    cue = subnic.add_parser("cuenta", help="anade o mueve una cuenta del nicho")
+    cue.add_argument("clave")
+    cue.add_argument("--red", choices=sorted(REDES))
+    cue.add_argument("--handle")
+    cue.add_argument("--url")
+    cue.add_argument("--estrategia", help="que se publica ahi y cada cuanto")
+    cue.add_argument("--etapa", default="creada",
+                     choices=[*nichos.ETAPAS_CUENTA, "error"])
+    cue.add_argument("--borrar", type=int, metavar="ID_CUENTA")
+    cue.set_defaults(func=cmd_nicho)
+
+    tar = subnic.add_parser("tarea", help="marca una tarea del montaje")
+    tar.add_argument("clave")
+    tar.add_argument("tarea_id", type=int)
+    tar.add_argument("--deshacer", action="store_true")
+    tar.set_defaults(func=cmd_nicho)
 
     pub = sub.add_parser("publicar", help="publica una produccion aprobada en una red")
     pub.add_argument("produccion_id", type=int)
-    pub.add_argument("--red", required=True, choices=sorted(REDES))
+    pub.add_argument("--red", choices=sorted(REDES),
+                     help="una red concreta; o usa --nicho para todas las suyas")
+    pub.add_argument("--nicho", help="publica en todas las cuentas listas de ese nicho")
     pub.add_argument("--media", help="archivo de video o imagen que se sube")
     pub.add_argument("--media-url", dest="media_url",
                      help="URL publica del medio (Instagram la exige)")

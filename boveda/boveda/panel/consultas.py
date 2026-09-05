@@ -6,6 +6,8 @@ import json
 import sqlite3
 from typing import Any
 
+from .. import nichos
+
 # Las columnas del kanban son las etapas reales del pipeline. Las cuatro
 # primeras son items (la publicacion guardada); las cuatro ultimas son
 # producciones (lo nuestro, derivado de ese item). Es el mismo recorrido que
@@ -219,3 +221,34 @@ def resumen(con: sqlite3.Connection) -> dict[str, Any]:
     comentarios = con.execute("SELECT COUNT(*) n FROM comentarios").fetchone()["n"]
     return {"items": total, "analizados": analizados, "publicados": publicados,
             "comentarios": comentarios}
+
+
+def tablero_nicho(con: sqlite3.Connection, clave: str) -> dict[str, Any]:
+    """El kanban de montaje de UN nicho: sus etapas, sus tareas y sus cuentas.
+
+    Cada nicho tiene su propio tablero a proposito: es lo que evita que el
+    estado de marketing se confunda con el de IA.
+    """
+    nicho = nichos.obtener(con, clave)
+    nicho_id = int(nicho["id"])
+    tareas = nichos.tareas(con, nicho_id)
+
+    columnas = []
+    for etapa in nichos.ETAPAS:
+        de_esta = [t for t in tareas if t["etapa"] == etapa["id"]]
+        columnas.append({**etapa, "tareas": de_esta,
+                         "total": len(de_esta),
+                         "hechas": sum(1 for t in de_esta if t["hecha"])})
+
+    return {
+        "nicho": dict(nicho),
+        "perfil": nichos.perfil_env(nicho["clave"]),
+        "columnas": columnas,
+        "cuentas": nichos.cuentas(con, nicho_id),
+        "escalera": nichos.ETAPAS_CUENTA,
+        "etiquetas_cuenta": nichos.ETIQUETAS_CUENTA,
+        "progreso": nichos.progreso(con, nicho_id),
+        "producciones": [dict(f) for f in con.execute(
+            "SELECT id, formato, estado, titulo FROM producciones WHERE nicho = ?"
+            " ORDER BY id DESC LIMIT 20", (nicho["clave"],))],
+    }

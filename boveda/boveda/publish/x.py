@@ -10,8 +10,7 @@ from __future__ import annotations
 import os
 
 from ..config import Config
-from .base import ErrorRed, Publicacion, Resultado, env, pedir, trocear_hilo
-
+from .base import _valor, ErrorRed, Publicacion, Resultado, env, pedir, trocear_hilo
 NOMBRE = "x"
 NECESITA_MEDIA = None
 
@@ -19,23 +18,24 @@ BASE = "https://api.x.com/2"
 LIMITE = 280
 
 
-def configurada(cfg: Config) -> bool:
-    return bool(os.environ.get("X_ACCESS_TOKEN"))
+def configurada(cfg: Config, perfil: str | None = None) -> bool:
+    return bool(_valor("X_ACCESS_TOKEN", perfil))
 
 
 def _cabeceras(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def verificar(cfg: Config) -> str:
-    token = env("X_ACCESS_TOKEN", NOMBRE)
+def verificar(cfg: Config, perfil: str | None = None) -> str:
+    token = env("X_ACCESS_TOKEN", NOMBRE, perfil)
     datos = pedir(f"{BASE}/users/me", red=NOMBRE, cabeceras=_cabeceras(token))
     usuario = (datos.get("data") or {})
     return f"@{usuario.get('username', '?')}"
 
 
 def publicar(cfg: Config, pub: Publicacion) -> Resultado:
-    token = env("X_ACCESS_TOKEN", NOMBRE)
+    perfil = pub.perfil
+    token = env("X_ACCESS_TOKEN", NOMBRE, perfil)
     limite = int(os.environ.get("X_LIMITE_CARACTERES", LIMITE))
     partes = trocear_hilo(pub.texto, limite)
     if not partes:

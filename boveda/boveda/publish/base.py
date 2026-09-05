@@ -41,6 +41,7 @@ class Publicacion:
     media: Path | None = None
     media_url: str | None = None
     etiquetas: tuple[str, ...] = ()
+    perfil: str | None = None          # nicho, para elegir las credenciales
 
 
 @dataclass
@@ -50,11 +51,29 @@ class Resultado:
     detalle: str = ""
 
 
-def env(clave: str, red: str, obligatorio: bool = True) -> str:
-    valor = os.environ.get(clave, "").strip()
-    if not valor and obligatorio:
-        raise FaltaConfiguracion(red, f"falta la variable {clave} en tu .env")
-    return valor
+def env(clave: str, red: str, perfil: str | None = None,
+        obligatorio: bool = True) -> str:
+    """Busca la credencial del nicho y, si no la hay, la general.
+
+    Cada nicho es un perfil: IG_ACCESS_TOKEN__MARKETING antes que
+    IG_ACCESS_TOKEN. Asi anadir una marca es anadir variables al .env, sin tocar
+    codigo ni guardar un solo secreto en la base de datos.
+    """
+    candidatos = [f"{clave}__{perfil}"] if perfil else []
+    candidatos.append(clave)
+    for candidato in candidatos:
+        valor = os.environ.get(candidato, "").strip()
+        if valor:
+            return valor
+    if obligatorio:
+        cual = " ni ".join(candidatos)
+        raise FaltaConfiguracion(red, f"falta {cual} en tu .env")
+    return ""
+
+
+def _valor(clave: str, perfil: str | None) -> str:
+    """La credencial del perfil si existe, si no la general. Sin exigirla."""
+    return env(clave, "", perfil, obligatorio=False)
 
 
 def pedir(url: str, metodo: str = "GET", *, red: str = "http", **kwargs: Any) -> Any:

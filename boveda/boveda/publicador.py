@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import montaje
+from . import montaje, nichos
 from .config import Config
 from .publish import FORMATOS, REDES
 from .publish.base import ErrorRed, Publicacion, Resultado
@@ -56,7 +56,8 @@ def _produccion(con: sqlite3.Connection, produccion_id: int) -> sqlite3.Row:
 
 def programar(con: sqlite3.Connection, produccion_id: int, red: str, *,
               cuando: str | None = None, media: str | None = None,
-              media_url: str | None = None, forzar: bool = False) -> int:
+              media_url: str | None = None, forzar: bool = False,
+              cuenta_id: int | None = None) -> int:
     """Deja una publicacion en la cola. No publica nada todavia."""
     if red not in REDES:
         raise ErrorPublicacion(f"red desconocida: {red}. Opciones: {', '.join(sorted(REDES))}")
@@ -90,8 +91,8 @@ def programar(con: sqlite3.Connection, produccion_id: int, red: str, *,
 
     cur = con.execute(
         "INSERT INTO publicaciones (produccion_id, red, estado, programado_para, "
-        "media_ruta, media_url) VALUES (?, ?, 'programada', ?, ?, ?)",
-        (produccion_id, red, cuando, media, media_url),
+        "media_ruta, media_url, cuenta_id) VALUES (?, ?, 'programada', ?, ?, ?, ?)",
+        (produccion_id, red, cuando, media, media_url, cuenta_id),
     )
     con.commit()
     return int(cur.lastrowid)
@@ -126,8 +127,17 @@ def _armar(cfg: Config, con: sqlite3.Connection, fila: sqlite3.Row) -> Publicaci
     if not url and media and cfg.url_base_media:
         url = f"{cfg.url_base_media}/{media.name}"
 
+    perfil = None
+    if fila["cuenta_id"]:
+        cuenta = con.execute(
+            "SELECT n.clave FROM cuentas c JOIN nichos n ON n.id = c.nicho_id"
+            " WHERE c.id = ?", (fila["cuenta_id"],)).fetchone()
+        if cuenta:
+            perfil = nichos.perfil_env(cuenta["clave"])
+
     return Publicacion(
         produccion_id=prod["id"],
+        perfil=perfil,
         formato=prod["formato"],
         texto=prod["cuerpo"],
         titulo=prod["titulo"],
@@ -145,7 +155,7 @@ def ejecutar(cfg: Config, con: sqlite3.Connection, fila: sqlite3.Row,
 
     if ensayo:
         aviso = []
-        if not modulo.configurada(cfg):
+        if not modulo.configurada(cfg, pub.perfil):
             aviso.append("SIN CREDENCIALES")
         if getattr(modulo, "NECESITA_MEDIA", None) and not (pub.media or pub.media_url):
             aviso.append("FALTA MEDIO")
@@ -188,3 +198,33 @@ def cancelar(con: sqlite3.Connection, publicacion_id: int) -> None:
             f"la publicacion {publicacion_id} no existe o ya esta publicada (no se puede deshacer)"
         )
     con.commit()
+
+
+def distribuir(con: sqlite3.Connection, produccion_id: int, clave_nicho: str, *,
+               cuando: str | None = None, media: str | None = None,
+               forzar: bool = False) -> list[dict[str, Any]]:
+    """Programa una produccion en TODAS las cuentas listas de un nicho.
+
+    Es el gesto que buscabas: escribes una vez y sale en las redes de esa marca.
+    Cada red recibe su propia fila, asi que si una falla las demas siguen y se ve
+    exactamente donde salio y donde no.
+    """
+    cuentas = nichos.redes_publicables(con, clave_nicho)
+    if not cuentas:
+        raise ErrorPublicacion(
+            f"el nicho '{clave_nicho}' no tiene ninguna cuenta con credenciales. "
+            f"Revisa 'boveda nicho ver {clave_nicho}'"
+        )
+
+    resultados: list[dict[str, Any]] = []
+    for cuenta in cuentas:
+        try:
+            pub_id = programar(con, produccion_id, cuenta["red"], cuando=cuando,
+                               media=media, forzar=forzar, cuenta_id=cuenta["id"])
+            resultados.append({"red": cuenta["red"], "publicacion_id": pub_id,
+                               "handle": cuenta["handle"], "ok": True})
+        except ErrorPublicacion as exc:
+            # Que una red no encaje (formato, ya publicado) no cancela el resto.
+            resultados.append({"red": cuenta["red"], "ok": False, "motivo": str(exc),
+                               "handle": cuenta["handle"]})
+    return resultados

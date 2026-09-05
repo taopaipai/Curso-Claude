@@ -30,6 +30,8 @@ COLUMNAS_NUEVAS: dict[str, dict[str, str]] = {
         "compartidos": "INTEGER",
         "guardados": "INTEGER",
     },
+    "publicaciones": {"cuenta_id": "INTEGER"},
+    "producciones": {"nicho_id": "INTEGER"},
 }
 
 

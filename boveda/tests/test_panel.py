@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from boveda import config, db
+from boveda import config, db, nichos
 from boveda.panel import consultas
 from boveda.panel.servidor import Panel
 
@@ -230,3 +230,83 @@ def test_la_miniatura_sale_del_fotograma_guardado(servidor, tmp_path):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(base + "/miniatura/2", timeout=10)
     assert exc.value.code == 404
+
+
+# --- nichos en el panel ------------------------------------------------------
+
+def test_el_panel_lista_los_nichos_con_su_progreso(servidor):
+    base, con, _ = servidor
+    nichos.crear(con, "marketing")
+    nichos.anadir_cuenta(con, "marketing", "tiktok", "@mk", etapa="verificada")
+
+    datos = _get(base, "/api/nichos")
+    assert [n["clave"] for n in datos["nichos"]] == ["marketing"]
+    assert datos["nichos"][0]["listas"] == 1
+    assert [e["id"] for e in datos["etapas"]][0] == "definicion"
+
+
+def test_el_tablero_de_un_nicho_trae_sus_etapas_y_cuentas(servidor):
+    base, con, _ = servidor
+    nichos.crear(con, "ia", "Inteligencia Artificial")
+    nichos.anadir_cuenta(con, "ia", "youtube", "@canalIA", estrategia="1 vídeo semanal")
+
+    d = _get(base, "/api/nicho/ia")
+    assert d["nicho"]["nombre"] == "Inteligencia Artificial"
+    assert d["perfil"] == "IA"                       # el sufijo de sus credenciales
+    assert len(d["columnas"]) == len(nichos.ETAPAS)
+    assert d["cuentas"][0]["estrategia"] == "1 vídeo semanal"
+    assert d["escalera"] == nichos.ETAPAS_CUENTA
+
+
+def test_un_nicho_que_no_existe_da_404(servidor):
+    base, _, _ = servidor
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base, "/api/nicho/fantasma")
+    assert exc.value.code == 404
+
+
+def test_crear_un_nicho_desde_el_panel(servidor):
+    base, con, _ = servidor
+    codigo, r = _post(base, {"accion": "crear_nicho", "clave": "Negocio Local"})
+    assert codigo == 200 and r["clave"] == "negocio-local"
+    assert con.execute("SELECT COUNT(*) FROM tareas_nicho").fetchone()[0] == len(
+        nichos.PLANTILLA)
+
+
+def test_marcar_una_tarea_desde_el_panel(servidor):
+    base, con, _ = servidor
+    nichos.crear(con, "marketing")
+    tarea = nichos.tareas(con, int(nichos.obtener(con, "marketing")["id"]))[0]
+
+    _post(base, {"accion": "tarea", "id": tarea["id"], "hecha": True})
+    assert con.execute("SELECT hecha FROM tareas_nicho WHERE id=?",
+                       (tarea["id"],)).fetchone()[0] == 1
+    _post(base, {"accion": "tarea", "id": tarea["id"], "hecha": False})
+    assert con.execute("SELECT hecha FROM tareas_nicho WHERE id=?",
+                       (tarea["id"],)).fetchone()[0] == 0
+
+
+def test_anadir_y_mover_una_cuenta_desde_el_panel(servidor):
+    base, con, _ = servidor
+    nichos.crear(con, "marketing")
+    codigo, r = _post(base, {"accion": "cuenta_nueva", "nicho": "marketing",
+                             "red": "instagram", "handle": "@marca",
+                             "estrategia": "carruseles los martes"})
+    assert codigo == 200
+    cuenta_id = con.execute("SELECT id FROM cuentas").fetchone()[0]
+
+    _post(base, {"accion": "cuenta_etapa", "id": cuenta_id, "etapa": "token"})
+    assert con.execute("SELECT etapa FROM cuentas WHERE id=?",
+                       (cuenta_id,)).fetchone()[0] == "token"
+
+    _post(base, {"accion": "cuenta_borrar", "id": cuenta_id})
+    assert con.execute("SELECT COUNT(*) FROM cuentas").fetchone()[0] == 0
+
+
+def test_el_panel_rechaza_una_etapa_de_cuenta_inventada(servidor):
+    base, con, _ = servidor
+    nichos.crear(con, "marketing")
+    nichos.anadir_cuenta(con, "marketing", "tiktok")
+    cuenta_id = con.execute("SELECT id FROM cuentas").fetchone()[0]
+    codigo, r = _post(base, {"accion": "cuenta_etapa", "id": cuenta_id, "etapa": "inventada"})
+    assert codigo == 400 and "etapa de cuenta" in r["error"]

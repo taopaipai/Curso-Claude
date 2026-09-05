@@ -13,8 +13,7 @@ import json
 import os
 
 from ..config import Config
-from .base import ErrorRed, Publicacion, Resultado, env, exigir_media, pedir, subir_archivo
-
+from .base import _valor, ErrorRed, Publicacion, Resultado, env, exigir_media, pedir, subir_archivo
 NOMBRE = "youtube"
 NECESITA_MEDIA = "video"
 
@@ -23,16 +22,16 @@ SUBIDA = ("https://www.googleapis.com/upload/youtube/v3/videos"
 TOKEN = "https://oauth2.googleapis.com/token"
 
 
-def configurada(cfg: Config) -> bool:
-    return all(os.environ.get(c) for c in
+def configurada(cfg: Config, perfil: str | None = None) -> bool:
+    return all(_valor(c, perfil) for c in
                ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN"))
 
 
-def _token(cfg: Config) -> str:
+def _token(cfg: Config, perfil: str | None = None) -> str:
     datos = pedir(TOKEN, "POST", red=NOMBRE, form={
-        "client_id": env("YT_CLIENT_ID", NOMBRE),
-        "client_secret": env("YT_CLIENT_SECRET", NOMBRE),
-        "refresh_token": env("YT_REFRESH_TOKEN", NOMBRE),
+        "client_id": env("YT_CLIENT_ID", NOMBRE, perfil),
+        "client_secret": env("YT_CLIENT_SECRET", NOMBRE, perfil),
+        "refresh_token": env("YT_REFRESH_TOKEN", NOMBRE, perfil),
         "grant_type": "refresh_token",
     })
     acceso = datos.get("access_token")
@@ -41,8 +40,8 @@ def _token(cfg: Config) -> str:
     return acceso
 
 
-def verificar(cfg: Config) -> str:
-    acceso = _token(cfg)
+def verificar(cfg: Config, perfil: str | None = None) -> str:
+    acceso = _token(cfg, perfil)
     datos = pedir("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
                   red=NOMBRE, cabeceras={"Authorization": f"Bearer {acceso}"})
     items = datos.get("items") or []
@@ -52,8 +51,9 @@ def verificar(cfg: Config) -> str:
 
 
 def publicar(cfg: Config, pub: Publicacion) -> Resultado:
+    perfil = pub.perfil
     video = exigir_media(pub, NOMBRE)
-    acceso = _token(cfg)
+    acceso = _token(cfg, perfil)
     privacidad = os.environ.get("YT_PRIVACY", "private")
 
     lineas = pub.texto.strip().splitlines()

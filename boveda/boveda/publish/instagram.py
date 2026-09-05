@@ -16,8 +16,7 @@ import os
 import time
 
 from ..config import Config
-from .base import ErrorRed, Publicacion, Resultado, env, exigir_url, pedir
-
+from .base import _valor, ErrorRed, Publicacion, Resultado, env, exigir_url, pedir
 NOMBRE = "instagram"
 NECESITA_MEDIA = "video"
 
@@ -30,13 +29,13 @@ def _base() -> str:
     return f"https://graph.facebook.com/{version}"
 
 
-def configurada(cfg: Config) -> bool:
-    return bool(os.environ.get("IG_USER_ID") and os.environ.get("IG_ACCESS_TOKEN"))
+def configurada(cfg: Config, perfil: str | None = None) -> bool:
+    return bool(_valor("IG_USER_ID", perfil) and _valor("IG_ACCESS_TOKEN", perfil))
 
 
-def verificar(cfg: Config) -> str:
-    usuario = env("IG_USER_ID", NOMBRE)
-    token = env("IG_ACCESS_TOKEN", NOMBRE)
+def verificar(cfg: Config, perfil: str | None = None) -> str:
+    usuario = env("IG_USER_ID", NOMBRE, perfil)
+    token = env("IG_ACCESS_TOKEN", NOMBRE, perfil)
     datos = pedir(f"{_base()}/{usuario}?fields=username,name&access_token={token}",
                   red=NOMBRE)
     return f"@{datos.get('username', '?')} ({datos.get('name', '')})".strip()
@@ -59,8 +58,9 @@ def _esperar_contenedor(contenedor: str, token: str) -> None:
 
 
 def publicar(cfg: Config, pub: Publicacion) -> Resultado:
-    usuario = env("IG_USER_ID", NOMBRE)
-    token = env("IG_ACCESS_TOKEN", NOMBRE)
+    perfil = pub.perfil
+    usuario = env("IG_USER_ID", NOMBRE, perfil)
+    token = env("IG_ACCESS_TOKEN", NOMBRE, perfil)
     url_media = exigir_url(pub, NOMBRE)
     pie = pub.texto[:2200]
 

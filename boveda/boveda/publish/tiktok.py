@@ -17,8 +17,8 @@ import time
 from pathlib import Path
 
 from ..config import Config
-from .base import (ErrorRed, Publicacion, Resultado, env, exigir_media, pedir,
-                   subir_archivo)
+from .base import (ErrorRed, Publicacion, Resultado, _valor, env, exigir_media,
+                   pedir, subir_archivo)
 
 NOMBRE = "tiktok"
 NECESITA_MEDIA = "video"
@@ -28,16 +28,16 @@ INTENTOS_ESTADO = 20
 ESPERA_ESTADO = 15
 
 
-def configurada(cfg: Config) -> bool:
-    return bool(os.environ.get("TIKTOK_ACCESS_TOKEN"))
+def configurada(cfg: Config, perfil: str | None = None) -> bool:
+    return bool(_valor("TIKTOK_ACCESS_TOKEN", perfil))
 
 
 def _cabeceras(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"}
 
 
-def verificar(cfg: Config) -> str:
-    token = env("TIKTOK_ACCESS_TOKEN", NOMBRE)
+def verificar(cfg: Config, perfil: str | None = None) -> str:
+    token = env("TIKTOK_ACCESS_TOKEN", NOMBRE, perfil)
     datos = pedir(f"{BASE}/post/publish/creator_info/query/", "POST", red=NOMBRE,
                   cabeceras=_cabeceras(token), json_datos={})
     info = (datos.get("data") or {})
@@ -60,7 +60,8 @@ def _esperar_publicacion(publish_id: str, token: str) -> dict:
 
 
 def publicar(cfg: Config, pub: Publicacion) -> Resultado:
-    token = env("TIKTOK_ACCESS_TOKEN", NOMBRE)
+    perfil = pub.perfil
+    token = env("TIKTOK_ACCESS_TOKEN", NOMBRE, perfil)
     privacidad = os.environ.get("TIKTOK_PRIVACY_LEVEL", "SELF_ONLY")
 
     info_post = {

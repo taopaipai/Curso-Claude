@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .. import db, montaje, publicador
+from .. import db, montaje, nichos, publicador
 from ..config import Config
 from . import consultas
 
@@ -77,6 +77,23 @@ class Panel(BaseHTTPRequestHandler):
                 datos = consultas.tablero(con, consulta)
                 datos["resumen"] = consultas.resumen(con)
                 return self._json(datos)
+            finally:
+                con.close()
+
+        if ruta == "/api/nichos":
+            con = self._conexion()
+            try:
+                return self._json({"nichos": nichos.listar(con),
+                                   "etapas": nichos.ETAPAS})
+            finally:
+                con.close()
+
+        if ruta.startswith("/api/nicho/"):
+            con = self._conexion()
+            try:
+                return self._json(consultas.tablero_nicho(con, ruta.rsplit("/", 1)[-1]))
+            except nichos.ErrorNicho as exc:
+                return self._error(str(exc))
             finally:
                 con.close()
 
@@ -155,6 +172,31 @@ class Panel(BaseHTTPRequestHandler):
         if accion == "cancelar":
             publicador.cancelar(con, identificador)
             return {"ok": True, "mensaje": f"publicacion {identificador} cancelada"}
+
+        if accion == "crear_nicho":
+            clave = (peticion.get("clave") or "").strip()
+            nichos.crear(con, clave, peticion.get("nombre"), peticion.get("descripcion"))
+            return {"ok": True, "mensaje": f"nicho '{nichos.normalizar_clave(clave)}' creado",
+                    "clave": nichos.normalizar_clave(clave)}
+
+        if accion == "tarea":
+            nichos.marcar_tarea(con, identificador, bool(peticion.get("hecha", True)))
+            return {"ok": True, "mensaje": f"tarea {identificador} actualizada"}
+
+        if accion == "cuenta_nueva":
+            cuenta_id = nichos.anadir_cuenta(
+                con, peticion.get("nicho") or "", peticion.get("red") or "",
+                peticion.get("handle"), peticion.get("url"), peticion.get("estrategia"),
+                peticion.get("etapa") or "creada")
+            return {"ok": True, "mensaje": f"cuenta #{cuenta_id} guardada"}
+
+        if accion == "cuenta_etapa":
+            nichos.mover_cuenta(con, identificador, peticion.get("etapa") or "creada")
+            return {"ok": True, "mensaje": f"cuenta {identificador} movida"}
+
+        if accion == "cuenta_borrar":
+            nichos.borrar_cuenta(con, identificador)
+            return {"ok": True, "mensaje": f"cuenta {identificador} borrada"}
 
         if accion == "reintentar":
             destinos = {"error_descarga": "importado",
