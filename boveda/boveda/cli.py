@@ -2,6 +2,8 @@
 
 Flujo tipico:
     boveda init
+    boveda vigilar --login                  # inicias sesion una vez
+    boveda vigilar                          # recoge lo que hayas guardado
     boveda importar instagram ~/export/saved_posts.json
     boveda descargar --limite 50
     boveda transcribir
@@ -29,7 +31,7 @@ from pathlib import Path
 import dataclasses
 
 from . import comentarios as com
-from . import config, db, export, montaje, nichos, panel, publicador
+from . import config, db, export, montaje, nichos, panel, publicador, vigilante
 from .ingest import IMPORTADORES
 from .publish import FORMATOS, REDES
 from .pipeline import analyze, download, ocr, repurpose, transcribe
@@ -246,6 +248,48 @@ def cmd_producir(args) -> int:
 def _barra(hechas: int, total: int, ancho: int = 18) -> str:
     llenas = round(ancho * hechas / total) if total else 0
     return "█" * llenas + "·" * (ancho - llenas)
+
+
+def cmd_vigilar(args) -> int:
+    """Abre tus paginas de guardados y trae lo nuevo."""
+    cfg, con = _abrir(args)
+    if not vigilante.disponible():
+        print('Falta playwright: pip install "boveda[vigilante]" '
+              "&& playwright install chromium", file=sys.stderr)
+        con.close()
+        return 2
+
+    if args.login:
+        con.close()
+        vigilante.entrar(cfg)
+        return 0
+
+    if args.historial:
+        for fila in vigilante.historial(con, args.limite or 10):
+            marca = "!" if fila["error"] else " "
+            print(f" {marca} {fila['revisado_en']}  {fila['plataforma']:<10} "
+                  f"{fila['vistos']:>3} vistos, {fila['nuevos']:>3} nuevos")
+            if fila["error"]:
+                print(f"     {fila['error'][:160]}")
+        con.close()
+        return 0
+
+    plataformas = [args.plataforma] if args.plataforma else None
+    resultados = vigilante.ronda(cfg, con, plataformas, args.profundidad, args.ver)
+    fallos = 0
+    for fila in resultados:
+        if fila.get("error"):
+            fallos += 1
+            print(f"  {fila['plataforma']:<10} {fila.get('vistos', 0)} vistos  "
+                  f"! {fila['error']}", file=sys.stderr)
+        else:
+            print(f"  {fila['plataforma']:<10} {fila['vistos']} vistos, "
+                  f"{fila['nuevos']} nuevos")
+    total = sum(f.get("nuevos", 0) for f in resultados)
+    print(f"\n{total} guardados nuevos en la boveda."
+          + (" Siguiente: boveda descargar" if total else ""))
+    con.close()
+    return 1 if fallos == len(resultados) else 0
 
 
 def cmd_nicho(args) -> int:
@@ -754,6 +798,18 @@ def construir_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="comando", required=True)
 
     sub.add_parser("init", help="crea la base de datos y las carpetas").set_defaults(func=cmd_init)
+
+    vig = sub.add_parser("vigilar", help="revisa tus guardados y trae lo nuevo")
+    vig.add_argument("--login", action="store_true",
+                     help="abre el navegador para que inicies sesion a mano")
+    vig.add_argument("--plataforma", choices=sorted(vigilante.PAGINAS))
+    vig.add_argument("--profundidad", type=int,
+                     help="cuantas veces baja la pagina (0 = solo lo mas reciente)")
+    vig.add_argument("--ver", action="store_true",
+                     help="muestra el navegador en vez de correr en segundo plano")
+    vig.add_argument("--historial", action="store_true", help="las ultimas rondas")
+    vig.add_argument("--limite", type=int)
+    vig.set_defaults(func=cmd_vigilar)
 
     imp = sub.add_parser("importar", help="importa un export de guardados")
     imp.add_argument("plataforma", choices=sorted(IMPORTADORES))

@@ -173,6 +173,20 @@ CREATE TABLE IF NOT EXISTS montajes (
     creado_en     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Registro de cada ronda del vigilante: cuando se miro cada plataforma, cuantos
+-- enlaces habia y cuantos eran nuevos. Sirve para ver si una ronda dejo de
+-- funcionar (0 enlaces suele significar sesion caducada, no que no guardaste nada).
+CREATE TABLE IF NOT EXISTS vigilancia (
+    id           INTEGER PRIMARY KEY,
+    plataforma   TEXT NOT NULL,
+    revisado_en  TEXT NOT NULL DEFAULT (datetime('now')),
+    vistos       INTEGER NOT NULL DEFAULT 0,
+    nuevos       INTEGER NOT NULL DEFAULT 0,
+    error        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_vigilancia ON vigilancia(plataforma, revisado_en);
+
 -- Un nicho es una marca con su propio publico: marketing, negocio, IA. Cada uno
 -- lleva su montaje por separado para que no se mezclen entre si.
 CREATE TABLE IF NOT EXISTS nichos (

@@ -174,6 +174,58 @@ Va en `127.0.0.1` a propósito y sin dependencias: `http.server` de la librería
 estándar y una página de HTML plano. No lo expongas a la red — tu bóveda tiene
 tus guardados, tus análisis y tus credenciales cerca.
 
+## Vigilante: que lo nuevo entre solo
+
+Ninguna de las tres redes avisa cuando guardas algo: no hay webhook ni API de
+"guardados". Así que el vigilante hace lo que harías tú, un par de veces al día:
+
+```bash
+boveda vigilar --login      # una sola vez: inicias sesión a mano en el navegador
+boveda vigilar              # abre tus listas y trae lo que sea nuevo
+boveda vigilar --historial  # qué vio cada ronda
+```
+
+Y en cron, dos veces al día:
+
+```cron
+0 9,21 * * * cd /ruta/a/boveda && .venv/bin/boveda vigilar >> data/vigilante.log 2>&1
+```
+
+Necesita `pip install "boveda[vigilante]" && playwright install chromium`, o
+apuntar `BOVEDA_CHROMIUM` al Chrome que ya tengas. Y tu usuario de cada red en
+`BOVEDA_IG_USUARIO` / `BOVEDA_TIKTOK_USUARIO`, para saber qué página abrir.
+
+**Cómo está hecho, y por qué así:**
+
+- **Usa tu navegador con tu sesión.** `--login` abre una ventana normal para que
+  entres a mano una vez; la sesión queda en un perfil en `data/navegador/`. Aquí
+  nunca se piden ni se guardan contraseñas.
+- **Es de solo lectura.** Abre la página, lee los enlaces y se va. No da likes,
+  no sigue a nadie, no comenta ni publica.
+- **Va despacio.** Por defecto no hace scroll: la lista viene ordenada por lo más
+  reciente y para una ronda diaria basta con lo de arriba. `--profundidad 5` baja
+  más, para la primera pasada.
+- **Saca los enlaces por su forma** (`/p/`, `/reel/`, `/video/`, `watch?v=`), no
+  por clases del HTML. Estas páginas se rediseñan cada dos por tres y una clase
+  renombrada tumbaría un raspado por selectores; el formato de una URL de post
+  no cambia.
+- **Cero enlaces se reporta como aviso**, no como "no guardaste nada": casi
+  siempre significa que la sesión caducó y hay que repetir `--login`.
+- Si una red falla, las otras siguen. Lo recogido entra en la colección
+  `vigilante` y se deduplica por URL, así que reimportar después el export
+  oficial no duplica nada.
+
+> **Esto va contra las condiciones de uso de las tres plataformas**, aunque sea
+> tu cuenta y tus propios datos. El riesgo real no es legal, es práctico: que te
+> pidan verificación o te cierren la sesión. Por eso el vigilante es opcional,
+> está apagado por defecto, va a dos rondas al día y no toca nada. El export
+> oficial sigue siendo la vía segura: si un día esto deja de funcionar, no
+> pierdes nada.
+
+En YouTube hay una alternativa sin navegador: con tus cookies, `yt-dlp` lee
+`:ytwatchlater` y `:ytfav` directamente. Si solo te interesa YouTube, esa vía es
+más estable.
+
 ## Cómo sacar tus guardados de cada plataforma
 
 Ninguna de las tres tiene API pública de guardados. La vía estable —y la única
@@ -581,6 +633,7 @@ boveda/
     prompts/              los prompts, en archivos aparte para que los edites
     comentarios.py        top 20 comentarios, métricas y sus instantáneas
     nichos.py             marcas: montaje, cuentas y credenciales por perfil
+    vigilante.py          abre tus listas de guardados y recoge lo nuevo
     panel/                el tablero kanban: servidor local + una página
     export.py             markdown y json
     montaje.py            guion -> escenas -> voz + subtítulos + mp4
@@ -589,9 +642,10 @@ boveda/
     web.py                HTTP compartido por las redes y los bancos de b-roll
     publicador.py         cola, aprobaciones y registro de lo publicado
     publish/              un conector por red (+ base.py: HTTP y troceo de hilos)
-  tests/                  150 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
-                          bancos simulados; el vídeo se monta con ffmpeg real y
-                          el panel se prueba levantando el servidor)
+  tests/                  161 pruebas, sin red (Claude, whisperx, yt-dlp, redes y
+                          bancos simulados; el vídeo se monta con ffmpeg real, el
+                          panel levantando el servidor y el vigilante recorriendo
+                          páginas locales con un navegador de verdad)
   data/                   todo lo que genera el proyecto (fuera de git)
 ```
 

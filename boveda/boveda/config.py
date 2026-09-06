@@ -53,6 +53,8 @@ class Config:
     broll: str
     broll_propio: str | None
     broll_oscurecer: float
+    usuarios: dict
+    profundidad_vigilante: int
 
     @property
     def db(self) -> Path:
@@ -69,6 +71,11 @@ class Config:
     @property
     def fotogramas(self) -> Path:
         return self.home / "fotogramas"
+
+    @property
+    def navegador(self) -> Path:
+        """Perfil del navegador del vigilante: aqui vive TU sesion iniciada."""
+        return self.home / "navegador"
 
     @property
     def cache_broll(self) -> Path:
@@ -125,4 +132,9 @@ def cargar(home: str | os.PathLike[str] | None = None) -> Config:
         broll=os.environ.get("BOVEDA_BROLL", "auto"),
         broll_propio=os.environ.get("BOVEDA_BROLL_DIR") or None,
         broll_oscurecer=float(os.environ.get("BOVEDA_BROLL_OSCURECER", "0.12")),
+        usuarios={
+            "instagram": (os.environ.get("BOVEDA_IG_USUARIO") or "").lstrip("@"),
+            "tiktok": (os.environ.get("BOVEDA_TIKTOK_USUARIO") or "").lstrip("@"),
+        },
+        profundidad_vigilante=int(os.environ.get("BOVEDA_VIGILANTE_SCROLL", "0")),
     )
